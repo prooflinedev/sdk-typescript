@@ -28,3 +28,14 @@ Licensed under the Apache License, Version 2.0.
 The repository bundles its public API contract in `openapi.public.json`.
 Run `pnpm install --frozen-lockfile`, `pnpm generate`, `pnpm build`, `pnpm lint`,
 `pnpm typecheck` and `pnpm test`.
+
+## Publishing
+
+GitHub Actions runs the checks on pull requests and main. The `Release` workflow
+builds checked artifacts without publishing credentials. Run it on main with
+`publish=false` to verify the release path. A `vX.Y.Z` tag matching the package
+version, or a main-branch dispatch with `publish=true`, publishes after the
+`npm` environment approves the job. Release commits must belong to main.
+
+Publishing uses GitHub OIDC and the repository's `release.yml` trusted publisher.
+No registry token is stored in GitHub.
