@@ -1,0 +1,48 @@
+{
+  "name": "@proofline/sdk",
+  "version": "1.0.0",
+  "description": "Typed clients for the token-scoped Proofline review API",
+  "type": "module",
+  "license": "Apache-2.0",
+  "homepage": "https://proofline.sh/docs/sdks/",
+  "keywords": [
+    "proofline",
+    "code-review",
+    "deployment",
+    "sdk",
+    "openapi"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "packageManager": "pnpm@11.25.0",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "openapi.public.json"
+  ],
+  "scripts": {
+    "generate": "openapi-typescript openapi.public.json -o src/schema.d.ts && node generate.mjs",
+    "build": "node -e \"require('node:fs').rmSync('dist', {recursive: true, force: true})\" && tsc && node -e \"const fs=require('node:fs'); fs.copyFileSync('src/schema.d.ts', 'dist/schema.d.ts')\"",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test tests/*.test.mjs",
+    "lint": "biome check src tests generate.mjs check-claims.mjs",
+    "prepack": "pnpm build"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.4.8",
+    "@types/node": "22.19.11",
+    "openapi-typescript": "7.13.0",
+    "typescript": "5.9.3"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/prooflinedev/sdk-typescript.git"
+  }
+}
