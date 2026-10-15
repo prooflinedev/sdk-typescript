@@ -39,6 +39,12 @@ jobs:
       - run: pnpm lint && pnpm typecheck && node check-claims.mjs
       - run: pnpm build && pnpm test
       - run: mkdir artifacts && npm pack --ignore-scripts --pack-destination artifacts
+      - name: Install the packed public entry point
+        run: |
+          mkdir /tmp/sdk-install
+          npm install --prefix /tmp/sdk-install --ignore-scripts --no-audit --no-fund "$PWD"/artifacts/*.tgz
+          cd /tmp/sdk-install
+          node --input-type=module -e 'import { ProoflineClient } from "@proofline/sdk"; if (typeof ProoflineClient !== "function") process.exit(1)'
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: package
