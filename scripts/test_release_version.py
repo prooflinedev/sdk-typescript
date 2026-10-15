@@ -38,6 +38,16 @@ class ReleaseAdmission(unittest.TestCase):
                         self.assertEqual(output.read_text(), "version=1.2.3\n")
                     else:
                         self.assertFalse(output.exists())
+            for api, admitted in (("1.2.2", True), ("1.2.4", False), ("1.1.3", False), ("2.2.3", False)):
+                with self.subTest(api=api):
+                    (root / "openapi.public.json").write_text(json.dumps({"info": {"version": api}}))
+                    output = root / "api-output"
+                    output.unlink(missing_ok=True)
+                    result = subprocess.run([sys.executable, str(SCRIPT)], cwd=root,
+                        env={**os.environ, "GITHUB_REF": "refs/heads/main", "GITHUB_OUTPUT": str(output)},
+                        capture_output=True, text=True)
+                    self.assertEqual(result.returncode == 0, admitted, result.stderr)
+            git("checkout", "--", "openapi.public.json")
             git("checkout", "--quiet", "-b", "feature")
             (root / "change").write_text("unmerged")
             git("add", ".")

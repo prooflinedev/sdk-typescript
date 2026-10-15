@@ -39,3 +39,5 @@ version, or a main-branch dispatch with `publish=true`, publishes after the
 
 Publishing uses GitHub OIDC and the repository's `release.yml` trusted publisher.
 No registry token is stored in GitHub.
+
+SDK patch releases can update packaging and publishing independently. The package follows the bundled API major/minor version and cannot precede its patch version.
