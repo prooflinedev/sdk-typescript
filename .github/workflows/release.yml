@@ -68,4 +68,4 @@ jobs:
         with:
           node-version: '22.23.2'
       - run: npm install --global npm@12.2.0
-      - run: npm publish artifacts/*.tgz --access public --provenance --ignore-scripts
+      - run: npm publish ./artifacts/*.tgz --access public --provenance --ignore-scripts
