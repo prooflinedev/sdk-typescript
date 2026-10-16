@@ -10,6 +10,8 @@ export type StartAgentSessionBody = NonNullable<paths["/api/v1/organizations/{or
 export type GetFindingFixPromptParameters = paths["/api/v1/organizations/{org_id}/findings/{finding_id}/fix-prompt"]["get"]["parameters"];
 export type RequestCommitReviewParameters = paths["/api/v1/organizations/{org_id}/repositories/{repo_id}/commit-reviews"]["post"]["parameters"];
 export type RequestCommitReviewBody = NonNullable<paths["/api/v1/organizations/{org_id}/repositories/{repo_id}/commit-reviews"]["post"]["requestBody"]>["content"]["application/json"];
+export type RequestFileReviewParameters = paths["/api/v1/organizations/{org_id}/repositories/{repo_id}/file-reviews"]["post"]["parameters"];
+export type RequestFileReviewBody = NonNullable<paths["/api/v1/organizations/{org_id}/repositories/{repo_id}/file-reviews"]["post"]["requestBody"]>["content"]["application/json"];
 export type RequestPatchReviewParameters = paths["/api/v1/organizations/{org_id}/repositories/{repo_id}/patch-reviews"]["post"]["parameters"];
 export type RequestPatchReviewBody = NonNullable<paths["/api/v1/organizations/{org_id}/repositories/{repo_id}/patch-reviews"]["post"]["requestBody"]>["content"]["application/json"];
 export type RequestReviewParameters = paths["/api/v1/organizations/{org_id}/repositories/{repo_id}/pull-requests/{number}/review"]["post"]["parameters"];
@@ -24,6 +26,7 @@ export type GetReviewParameters = paths["/api/v1/organizations/{org_id}/reviews/
 export type GetAssessmentParameters = paths["/api/v1/organizations/{org_id}/reviews/{review_id}/assessments/{assessment_id}"]["get"]["parameters"];
 export type RerunReviewParameters = paths["/api/v1/organizations/{org_id}/reviews/{review_id}/rerun"]["post"]["parameters"];
 export type GetReviewRoutingParameters = paths["/api/v1/organizations/{org_id}/reviews/{review_id}/routing"]["get"]["parameters"];
+export type StopReviewParameters = paths["/api/v1/organizations/{org_id}/reviews/{review_id}/stop"]["post"]["parameters"];
 
 export class Operations {
   constructor(private readonly invoke: Invoke) {}
@@ -50,6 +53,10 @@ export class Operations {
 
   requestCommitReview(parameters: RequestCommitReviewParameters, body: RequestCommitReviewBody): Promise<components["schemas"]["CommitReviewResponse"]> {
     return this.invoke("POST", "/api/v1/organizations/{org_id}/repositories/{repo_id}/commit-reviews", parameters, body);
+  }
+
+  requestFileReview(parameters: RequestFileReviewParameters, body: RequestFileReviewBody): Promise<components["schemas"]["FileReviewResponse"]> {
+    return this.invoke("POST", "/api/v1/organizations/{org_id}/repositories/{repo_id}/file-reviews", parameters, body);
   }
 
   requestPatchReview(parameters: RequestPatchReviewParameters, body: RequestPatchReviewBody): Promise<components["schemas"]["PatchReviewResponse"]> {
@@ -98,5 +105,9 @@ export class Operations {
 
   getReviewRouting(parameters: GetReviewRoutingParameters): Promise<components["schemas"]["ReviewRoutingView"]> {
     return this.invoke("GET", "/api/v1/organizations/{org_id}/reviews/{review_id}/routing", parameters);
+  }
+
+  stopReview(parameters: StopReviewParameters): Promise<components["schemas"]["StopResponse"]> {
+    return this.invoke("POST", "/api/v1/organizations/{org_id}/reviews/{review_id}/stop", parameters);
   }
 }

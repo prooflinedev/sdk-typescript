@@ -144,6 +144,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/organizations/{org_id}/repositories/{repo_id}/file-reviews": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Review selected whole files
+         * @description Reviews up to twenty exact file paths at one pushed commit. Requires live GitHub read access and verifies every path at that commit. The retained selection is immutable; a repeat by the same person returns its review. Results remain in Proofline and are never posted to GitHub.
+         */
+        post: operations["request_file_review"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/organizations/{org_id}/repositories/{repo_id}/patch-reviews": {
         parameters: {
             query?: never;
@@ -384,6 +404,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/organizations/{org_id}/reviews/{review_id}/stop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Stop your local review
+         * @description Stops the holder's own pending or running withheld patch, commit or named-file review. Requires a personal or CLI device token with live GitHub read access to the review's repository. Organization, CI job and MCP OAuth tokens cannot stop reviews. The stopped review retains its findings and exact code identity; requesting the same input returns that stopped review.
+         */
+        post: operations["stop_review"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -525,6 +565,11 @@ export interface components {
         };
         /** @enum {string} */
         AgentVendor: "CURSOR_CLOUD_AGENTS" | "DEVIN";
+        ApprovalGap: {
+            /** Format: uuid */
+            assessment_id: string;
+            code: string;
+        };
         AssessmentProjection: {
             /**
              * Format: uuid
@@ -583,6 +628,8 @@ export interface components {
         /** @enum {string} */
         Authority: "ADVISORY" | "DEPLOYMENT_POLICY";
         Availability: ("RECORDED" | "NOT_RECORDED" | "LEGACY" | "OPERATIONAL_FAILURE") | "LIMITED";
+        /** @description How the capture ended. */
+        CaptureState: "PENDING" | "RECORDED" | "UNBOUND" | "NOT_EXECUTED" | "INCOMPLETE";
         /**
          * @description Which conditions behind a check's result the change brought, and which
          *      World found at the review's base revision. It sits beside the result and
@@ -1302,7 +1349,8 @@ export interface components {
             id: string;
             /**
              * @description `PULL_REQUEST`, `DEPLOYMENT`, `PATCH`, a review of local changes
-             *      sent as a patch, or `COMMIT`, a review of pushed commits.
+             *      sent as a patch, `COMMIT`, a review of pushed commits, or `FILES`,
+             *      complete selected files at one pushed commit.
              */
             kind: string;
             /**
@@ -1486,7 +1534,7 @@ export interface components {
         /** @enum {string} */
         ExportFindingSeverity: "WARNING" | "SERIOUS";
         /** @enum {string} */
-        ExportReviewKind: "PULL_REQUEST" | "DEPLOYMENT" | "PATCH" | "COMMIT";
+        ExportReviewKind: "PULL_REQUEST" | "DEPLOYMENT" | "PATCH" | "COMMIT" | "FILES";
         /** @enum {string} */
         ExportReviewStatus: "PENDING" | "RUNNING" | "COMPLETED" | "INCOMPLETE" | "FAILED" | "SUPERSEDED" | "STOPPED" | "EXCLUDED";
         /** @description The closed row vocabulary of the existing raw-stream export operation. */
@@ -1502,6 +1550,35 @@ export interface components {
             passes: string[];
             /** @description Repository-relative path retained by the routing plan. */
             path: string;
+        };
+        /** @description Whole files selected at one exact pushed commit. */
+        FileReviewRequest: {
+            /** @description The exact pushed commit whose whole files are reviewed. */
+            commit_sha: string;
+            /** @description Between one and twenty exact repository-relative file paths. */
+            paths: string[];
+        };
+        /** @description What a named-file review request produced. */
+        FileReviewResponse: {
+            /**
+             * @description True when this exact selection already had a review and that one is
+             *      returned. Sending the same selection twice by the same person reviews it once.
+             */
+            existing: boolean;
+            /**
+             * Format: uuid
+             * @description The review of this selection, readable through the review and findings
+             *      routes.
+             */
+            review_id: string;
+        };
+        /**
+         * @description The retained selection, not a digest of file contents. Its identity uses
+         *      a version prefix and length-framed UTF-8 paths in their sorted order.
+         */
+        FileScope: {
+            paths: string[];
+            paths_digest: string;
         };
         FilterChoice: {
             /**
@@ -1898,6 +1975,12 @@ export interface components {
             severity: components["schemas"]["ExportFindingSeverity"];
         };
         GateState: {
+            /**
+             * @description The occurrence questions the gate's approval deferred, as each
+             *      observed execution of its deployment answered them. Outcome-only
+             *      records: none of them changes the gate or grades a prediction.
+             */
+            occurrence_captures: components["schemas"]["OccurrenceCapture"][];
             /** @description Recorded override authorization, not confirmation of provider delivery. */
             override_record?: components["schemas"]["Override"] | null;
             /**
@@ -1919,6 +2002,29 @@ export interface components {
              *      never a complete assessment.
              */
             incompleteness_kind?: string | null;
+        };
+        /** @description The capture of one observed execution of a gate's deployment. */
+        OccurrenceCapture: {
+            /** @description Assessments whose approval could defer nothing, with the reason. */
+            approval_gaps: components["schemas"]["ApprovalGap"][];
+            detail?: string | null;
+            occurrence_key?: string | null;
+            questions: components["schemas"]["OccurrenceQuestion"][];
+            state: components["schemas"]["CaptureState"];
+        };
+        /** @description One deferred question as the gate presents it. */
+        OccurrenceQuestion: {
+            /** Format: uuid */
+            assessment_id: string;
+            /** @description World's binding or refusal code, or the control plane's own gap. */
+            code?: string | null;
+            family_key: string;
+            /** Format: int32 */
+            family_version: number;
+            /** @description World's observed result once it recorded the question. */
+            observed_result?: string | null;
+            outcome_id?: string | null;
+            state: components["schemas"]["QuestionState"];
         };
         OpenFindingCounts: {
             /**
@@ -2178,6 +2284,8 @@ export interface components {
             /** @description The current gate projection, including a recorded bypass or supersession by a newer head. */
             status: components["schemas"]["GateStatus"];
         };
+        /** @description Where one deferred question stands. */
+        QuestionState: "PENDING" | "RECORDED" | "UNBOUND" | "NOT_EXECUTED";
         /**
          * @description An environment a refusal names. `external_key` is how its pages are
          *      addressed.
@@ -2482,7 +2590,8 @@ export interface components {
             id: string;
             /**
              * @description `PULL_REQUEST`, `DEPLOYMENT`, `PATCH`, a review of local changes
-             *      sent as a patch, or `COMMIT`, a review of pushed commits.
+             *      sent as a patch, `COMMIT`, a review of pushed commits, or `FILES`,
+             *      complete selected files at one pushed commit.
              */
             kind: string;
             /** @description The review's stable public address: `rev_` followed by its identifier without hyphens. */
@@ -2612,8 +2721,8 @@ export interface components {
             /** @description The pinned head commit SHA, null when the review records none. */
             head_commit_sha?: string | null;
             /**
-             * @description Whether the review analyzes a pull request, a deployment, a local patch or pushed
-             *      commits.
+             * @description Whether the review analyzes a pull request, a deployment, a local patch, pushed
+             *      commits or selected whole files.
              */
             kind: components["schemas"]["ExportReviewKind"];
             /**
@@ -2883,6 +2992,16 @@ export interface components {
             /** @description The `prompt_digest` of the prompt the person confirmed. */
             prompt_digest: string;
         };
+        /** @description What stopping a review recorded. */
+        StopResponse: {
+            /** Format: uuid */
+            review_id: string;
+            /** @description Always `STOPPED`: the review's status once the stop is committed. */
+            status: string;
+            /** Format: date-time */
+            stopped_at: string;
+            stopped_by: components["schemas"]["ActorView"];
+        };
         /**
          * @description One assessment's authorization of one subject, by identity.
          *
@@ -2923,6 +3042,8 @@ export interface components {
             commit_sha?: string | null;
             /** @description The GitHub deployment identifier a `GITHUB_WORKFLOW_RUN` subject ran for. Absent when the run was not for a deployment. */
             deployment_external_id?: string | null;
+            /** @description Whole-file selection at the pinned revision; absent for comparisons. */
+            file_scope?: components["schemas"]["FileScope"] | null;
             /**
              * Format: uuid
              * @description The subject's stable identifier. It holds across a poll refresh even
@@ -3276,6 +3397,61 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CommitReviewResponse"];
+                };
+            };
+            /**
+             * @description A run-now request that created nothing, as the 400 it is answered with.
+             *
+             *      The refusal is a configuration fact, not a failure, and it is still sent
+             *      as an RFC 9457 problem: `title`, `status` and `detail` are what a client
+             *      that knows only problems shows, and `repository_name` and `refusal` are
+             *      the extension members a client that knows refusals links from. During a
+             *      rollout a page loaded from the previous bundle keeps working against
+             *      this server, because a refusal was a 400 with a `detail` before too.
+             */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunNowRefused"];
+                };
+            };
+            /** @description An RFC 9457 problem; the HTTP status remains authoritative. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    request_file_review: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                org_id: string;
+                repo_id: string;
+            };
+            cookie?: never;
+        };
+        /** @description Whole files selected at one exact pushed commit. */
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FileReviewRequest"];
+            };
+        };
+        responses: {
+            /** @description What a named-file review request produced. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FileReviewResponse"];
                 };
             };
             /**
@@ -3758,6 +3934,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ReviewRoutingView"];
+                };
+            };
+            /** @description An RFC 9457 problem; the HTTP status remains authoritative. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    stop_review: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                org_id: string;
+                review_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description What stopping a review recorded. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StopResponse"];
                 };
             };
             /** @description An RFC 9457 problem; the HTTP status remains authoritative. */
