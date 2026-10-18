@@ -745,6 +745,7 @@ export interface components {
              *      It is untrusted text: render it inert.
              */
             prose?: components["schemas"]["Prose"] | null;
+            /** @description The recorded prose-generation outcome, before response-time withholding. */
             prose_outcome: components["schemas"]["ProseOutcome"];
             /**
              * @description The route the summary applied. Null when the review recorded no change
@@ -1670,11 +1671,19 @@ export interface components {
         /** @enum {string} */
         ExportValidationSource: "ui" | "github_comment" | "proofline";
         FileFact: {
-            /** Format: int64 */
+            /**
+             * Format: int64
+             * @description Lines added in this file's recorded diff.
+             */
             additions: number;
-            /** Format: int64 */
+            /**
+             * Format: int64
+             * @description Lines deleted in this file's recorded diff.
+             */
             deletions: number;
+            /** @description The review depth recorded for this file. */
             depth: components["schemas"]["ReviewDepth"];
+            /** @description The repository-relative path of the changed file. */
             path: string;
             /** @description The path before a rename. */
             previous_path?: string | null;
