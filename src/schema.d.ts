@@ -2091,7 +2091,10 @@ export interface components {
              *      patched head. Empty until an outcome is recorded.
              */
             checks: unknown;
-            /** Format: uuid */
+            /**
+             * Format: uuid
+             * @description The finding being re-verified against this patch.
+             */
             finding_id: string;
             /**
              * Format: int32
@@ -2099,6 +2102,7 @@ export interface components {
              *      series on this patch, at most 3.
              */
             iteration: number;
+            /** @description The local re-verification result; it does not change the original finding. */
             outcome: components["schemas"]["LocalReverificationOutcome"];
         };
         /**
@@ -2331,7 +2335,10 @@ export interface components {
         PatchTriggerSource: "HOOK_PRE_COMMIT" | "HOOK_PRE_PUSH";
         /** @description One finding a patch review re-verifies against the patch. */
         PatchVerification: {
-            /** Format: uuid */
+            /**
+             * Format: uuid
+             * @description The finding being re-verified against this patch.
+             */
             finding_id: string;
             /**
              * Format: int32
