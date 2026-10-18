@@ -272,6 +272,68 @@ test("all twelve generated methods use the authenticated token surface and prese
   assert.equal(fixture.calls.at(-1).body, '{"mode":"FULL"}');
 });
 
+test("review reads preserve summaries, withheld prose and exact code identity", async (t) => {
+  const summary = {
+    head_sha: "a".repeat(40),
+    base_sha: "b".repeat(40),
+    files: [
+      {
+        path: "src/new.ts",
+        previous_path: "src/old.ts",
+        status: "renamed",
+        additions: 3,
+        deletions: 1,
+        depth: "STANDARD",
+      },
+    ],
+    route: "SHORT",
+    prose_outcome: "PUBLISHED",
+    prose: {
+      headline: "[withheld] <script>literal text</script>",
+      paragraphs: ["Moves the request handler."],
+      notable_paths: ["src/new.ts"],
+    },
+  };
+  let body;
+  const fixture = await server(t, (request, response) => {
+    assert.equal(request.method, "GET");
+    assert.equal(request.headers.authorization, `Bearer ${token}`);
+    json(response, 200, body);
+  });
+  const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
+  for (const value of [undefined, null, summary, { ...summary, prose: null }]) {
+    body = {
+      ...review(),
+      head_commit_sha: "a".repeat(40),
+      base_commit_sha: "b".repeat(40),
+    };
+    if (value !== undefined) body.change_summary = value;
+    for (const [method, path] of [
+      ["getReview", { org_id: orgId, review_id: reviewId }],
+      [
+        "getPullRequestReview",
+        {
+          org_id: orgId,
+          repository: "repo/name",
+          pull_request_number: 42,
+          run_number: 3,
+        },
+      ],
+      ["getDeploymentReview", { org_id: orgId, public_key: "deployment" }],
+    ]) {
+      const result = await client[method]({ path });
+      assert.deepEqual(result.change_summary, value);
+      assert.equal(result.head_commit_sha, "a".repeat(40));
+      assert.equal(result.base_commit_sha, "b".repeat(40));
+      assert.equal(result.publication, "WITHHELD");
+      assert.equal(
+        Object.hasOwn(result, "change_summary"),
+        value !== undefined,
+      );
+    }
+  }
+});
+
 test("reads honor bounded Retry-After and mutations make one attempt", async (t) => {
   let forcedHeader;
   const fixture = await server(t, (request, response, calls) => {
