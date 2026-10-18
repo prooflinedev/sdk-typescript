@@ -175,7 +175,7 @@ export interface paths {
         put?: never;
         /**
          * Review local changes
-         * @description Reviews a unified diff against a commit GitHub has in the repository, and returns that patch's review when one exists. The review reads only that commit and the patch, and is never posted to a pull request. Requires live GitHub read access; the same patch on the same base always returns the same review.
+         * @description Reviews a unified diff against a commit GitHub has in the repository, and returns that patch's review when one exists. The review reads only that commit and the patch, and is never posted to a pull request. With `verify_finding_ids`, the review also re-verifies those open findings of one pull request against the patch and reports each outcome on the review, without changing the pull request's findings. Requires live GitHub read access; the same patch on the same base, re-verifying the same findings, always returns the same review.
          */
         post: operations["request_patch_review"];
         delete?: never;
@@ -566,8 +566,12 @@ export interface components {
         /** @enum {string} */
         AgentVendor: "CURSOR_CLOUD_AGENTS" | "DEVIN";
         ApprovalGap: {
-            /** Format: uuid */
+            /**
+             * Format: uuid
+             * @description Assessment whose approval could not supply deferred occurrence questions.
+             */
             assessment_id: string;
+            /** @description Reason the assessment's approval could not supply deferred occurrence questions. */
             code: string;
         };
         AssessmentProjection: {
@@ -703,6 +707,27 @@ export interface components {
             /** @description The revision that holds the counted conditions. */
             revision: components["schemas"]["AttributedRevision"];
         };
+        /** @enum {string} */
+        ChangeDiagramKindView: "FLOWCHART" | "SEQUENCE";
+        ChangeDiagramOutcome: "DRAWN" | "NO_INTERACTION" | "INDEX_INCOMPLETE" | "OVER_CAPS" | "DECISION_UNAVAILABLE";
+        /** @description The change-level diagram recorded for a review, or why there is none. */
+        ChangeDiagramView: {
+            /** @description Diagram format when a diagram was drawn; otherwise null. */
+            kind?: components["schemas"]["ChangeDiagramKindView"] | null;
+            /**
+             * @description Markdown lines under the diagram: which environment and snapshot its
+             *      dashed relations come from, or which environment was not read.
+             */
+            legend: string[];
+            /**
+             * @description Mermaid source the server generated from the stored graph. Every
+             *      label is escaped, and no model wrote any of it. Absent unless
+             *      `outcome` is `DRAWN`.
+             */
+            mermaid?: string | null;
+            /** @description Whether the diagram was drawn, or why no diagram is available. */
+            outcome: components["schemas"]["ChangeDiagramOutcome"];
+        };
         /**
          * @description World's lifecycle disclosure for the evaluator version that answered, as
          *      the receipt recorded it. A deployment gate counts only `GATING` results
@@ -803,6 +828,12 @@ export interface components {
              */
             decision_presentation?: components["schemas"]["CustomerDecision"] | null;
             /**
+             * @description What World declares depends on what this change deploys in this
+             *      environment, at the assessment's pinned snapshot. Absent when the
+             *      assessment's kind records no declared reach.
+             */
+            declared_reach?: components["schemas"]["DeclaredReachView"] | null;
+            /**
              * @description The risk domains the assessment evaluated, each with its status and
              *      reason, ordered by domain.
              */
@@ -859,6 +890,12 @@ export interface components {
              *      records no decision basis.
              */
             decision_presentation?: components["schemas"]["CustomerDecision"] | null;
+            /**
+             * @description What World declares depends on what this change deploys in this
+             *      environment, at the assessment's pinned snapshot. Absent when the
+             *      assessment's kind records no declared reach.
+             */
+            declared_reach?: components["schemas"]["DeclaredReachView"] | null;
             /**
              * @description The risk domains the assessment evaluated, each with its status and
              *      reason, ordered by domain.
@@ -1281,6 +1318,12 @@ export interface components {
              */
             base_ref?: string | null;
             /**
+             * @description The change-level diagram: the changed call path from the pinned code
+             *      index and the relations World declares. Absent when the review
+             *      recorded none.
+             */
+            change_diagram?: components["schemas"]["ChangeDiagramView"] | null;
+            /**
              * @description The GitHub check run Proofline published for this review. Null when
              *      none was published.
              */
@@ -1354,6 +1397,13 @@ export interface components {
              */
             kind: string;
             /**
+             * @description For a patch review requested with `verify_finding_ids`, each finding
+             *      it re-verifies against the patch and the outcome. The outcome is
+             *      local: the pull request's finding is unchanged whatever it is. Absent
+             *      otherwise.
+             */
+            local_reverifications?: components["schemas"]["LocalReverification"][];
+            /**
              * @description The deterministic policy for this exact repository/head, when opted in.
              *      Its captured review owner and GitHub bypass remain separate history.
              */
@@ -1412,6 +1462,12 @@ export interface components {
             pull_request_title?: string | null;
             /** @description The pull request on GitHub. Absent for a deployment review or when the repository is unknown. */
             pull_request_url?: string | null;
+            /**
+             * @description How this review decided what it reviews after a push or a full-review
+             *      request. Absent for a review that refreshes nothing, and while a
+             *      refresh has not decided yet.
+             */
+            refresh?: components["schemas"]["RefreshView"] | null;
             /**
              * @description Every other run for this pull request the caller can see, plus reviews
              *      joined to this one by supersession or rerun.
@@ -1500,6 +1556,38 @@ export interface components {
         };
         /** @enum {string} */
         Dataset: "reviews" | "finding_outcomes" | "finding_validations" | "spend" | "findings";
+        /** @enum {string} */
+        DeclaredReachOutcome: "READ" | "NO_ROOTS" | "ROOTS_UNKNOWN" | "UNAVAILABLE";
+        /**
+         * @description One assessment's declared reach receipt. A reached entity declares a
+         *      dependency on what the change deploys; it is never a claim that the change
+         *      breaks it.
+         */
+        DeclaredReachView: {
+            /**
+             * @description Whether World's walk ended with no gap. An empty, incomplete reach
+             *      says nothing about what depends on the change.
+             */
+            complete: boolean;
+            /** @description Every reached entity, shorter paths first, then by kind. */
+            entities: components["schemas"]["ReachedEntityView"][];
+            /** @description Where World's walk or its evidence stopped. */
+            gaps: components["schemas"]["ReachGapView"][];
+            /**
+             * @description `READ` when World answered, `NO_ROOTS` when no evidence bound a
+             *      deployed artifact or workload to the repository, `ROOTS_UNKNOWN` when
+             *      World's evidence does not establish which revision runs, and
+             *      `UNAVAILABLE` when World gave no answer. Only `READ` carries entities or gaps.
+             */
+            outcome: components["schemas"]["DeclaredReachOutcome"];
+            /** @description World's digest of its full answer. Null unless `READ`. */
+            receipt_digest?: string | null;
+            /**
+             * Format: uuid
+             * @description The World snapshot the reach was read at. Null unless `READ`.
+             */
+            snapshot_id?: string | null;
+        };
         DeepReviewEscalation: {
             /** @description A fixed customer explanation; internal admission errors are withheld. */
             reason: string;
@@ -1577,7 +1665,9 @@ export interface components {
          *      a version prefix and length-framed UTF-8 paths in their sorted order.
          */
         FileScope: {
+            /** @description Sorted, unique repository-relative paths selected for whole-file review. */
             paths: string[];
+            /** @description Digest of the selected paths, not the file contents. */
             paths_digest: string;
         };
         FilterChoice: {
@@ -1991,6 +2081,35 @@ export interface components {
         };
         /** @enum {string} */
         GateStatus: "REQUESTED" | "EVALUATING" | "ALLOWED" | "BLOCKED" | "BYPASSED" | "SUPERSEDED";
+        /**
+         * @description One finding a patch review re-verified against the patch. The outcome is
+         *      local: the pull request's finding is unchanged whatever it is.
+         */
+        LocalReverification: {
+            /**
+             * @description Each deterministic check the finding cited and its result on the
+             *      patched head. Empty until an outcome is recorded.
+             */
+            checks: unknown;
+            /** Format: uuid */
+            finding_id: string;
+            /**
+             * Format: int32
+             * @description The request's number among the requests to re-verify the finding's
+             *      series on this patch, at most 3.
+             */
+            iteration: number;
+            outcome: components["schemas"]["LocalReverificationOutcome"];
+        };
+        /**
+         * @description `RESOLVED_VERIFIED` needs the re-investigation to reject the finding's
+         *      hypothesis and every cited check to pass. `STILL_PRESENT`: the hypothesis
+         *      is supported, or a check still finds the mechanism. `NOT_VERIFIED`:
+         *      anything else, including a review that ended without an answer.
+         *      `PENDING`: the review is still running.
+         * @enum {string}
+         */
+        LocalReverificationOutcome: "RESOLVED_VERIFIED" | "STILL_PRESENT" | "NOT_VERIFIED" | "PENDING";
         NotAssessedView: {
             /**
              * @description The display name of the environment whose assessment is not
@@ -2007,23 +2126,36 @@ export interface components {
         OccurrenceCapture: {
             /** @description Assessments whose approval could defer nothing, with the reason. */
             approval_gaps: components["schemas"]["ApprovalGap"][];
+            /** @description Explanation of the capture's outcome, when available. */
             detail?: string | null;
+            /** @description Retained identity of the deployment occurrence, when available. */
             occurrence_key?: string | null;
+            /** @description Deferred questions and their binding or observed results for this occurrence. */
             questions: components["schemas"]["OccurrenceQuestion"][];
+            /** @description Whether the capture is pending, recorded, unbound, not executed, or incomplete. */
             state: components["schemas"]["CaptureState"];
         };
         /** @description One deferred question as the gate presents it. */
         OccurrenceQuestion: {
-            /** Format: uuid */
+            /**
+             * Format: uuid
+             * @description Assessment whose approval deferred this question.
+             */
             assessment_id: string;
             /** @description World's binding or refusal code, or the control plane's own gap. */
             code?: string | null;
+            /** @description Hypothesis family key for the deferred question. */
             family_key: string;
-            /** Format: int32 */
+            /**
+             * Format: int32
+             * @description Hypothesis family version for the deferred question.
+             */
             family_version: number;
             /** @description World's observed result once it recorded the question. */
             observed_result?: string | null;
+            /** @description World outcome record identifier, when an observed result was recorded. */
             outcome_id?: string | null;
+            /** @description Whether the question is pending, recorded, unbound, or not executed. */
             state: components["schemas"]["QuestionState"];
         };
         OpenFindingCounts: {
@@ -2155,6 +2287,17 @@ export interface components {
              * @default null
              */
             trigger_source: components["schemas"]["PatchTriggerSource"] | null;
+            /**
+             * @description Open findings of one pull request in this repository to re-verify
+             *      against the patch, at most 20. The review re-investigates each one
+             *      and reports its outcome in `local_reverifications`; the pull
+             *      request's findings are unchanged whatever it is. Requires an API
+             *      token. Each finding's series takes at most 3 requests per patch, and
+             *      the pull request at most 10 re-verification requests per hour,
+             *      counted with those a coding agent makes through MCP.
+             * @default []
+             */
+            verify_finding_ids: string[];
         };
         /** @description What a patch review request produced. */
         PatchReviewResponse: {
@@ -2174,6 +2317,11 @@ export interface components {
              *      and findings routes.
              */
             review_id: string;
+            /**
+             * @description Each finding of `verify_finding_ids` the review re-verifies, one per
+             *      finding series. Empty without `verify_finding_ids`.
+             */
+            verify: components["schemas"]["PatchVerification"][];
         };
         /**
          * @description The git hook that asked for a patch review. The client declares it; it is
@@ -2181,6 +2329,17 @@ export interface components {
          * @enum {string}
          */
         PatchTriggerSource: "HOOK_PRE_COMMIT" | "HOOK_PRE_PUSH";
+        /** @description One finding a patch review re-verifies against the patch. */
+        PatchVerification: {
+            /** Format: uuid */
+            finding_id: string;
+            /**
+             * Format: int32
+             * @description This request's number among the requests to re-verify the finding's
+             *      series on this patch, at most 3.
+             */
+            iteration: number;
+        };
         /** @enum {string} */
         PermissionView: "PERMIT" | "BLOCK";
         PlanProjection: {
@@ -2227,7 +2386,10 @@ export interface components {
              * @description The number of environment assessments counted by the recorded decision. Null before a decision.
              */
             assessment_count?: number | null;
-            /** @description The frozen blocking threshold, either SERIOUS or WARNING; later settings do not restamp it. */
+            /**
+             * @description The frozen blocking threshold, either SERIOUS (serious and critical findings) or WARNING (every
+             *      supported finding); later settings do not restamp it.
+             */
             blocking_severity: string;
             /**
              * Format: date-time
@@ -2286,6 +2448,65 @@ export interface components {
         };
         /** @description Where one deferred question stands. */
         QuestionState: "PENDING" | "RECORDED" | "UNBOUND" | "NOT_EXECUTED";
+        ReachGapView: {
+            /** @description `COVERAGE_INCOMPLETE`, `SOURCE_CAPABILITY_MISSING` or `BOUND_REACHED`. */
+            code: string;
+        };
+        ReachStepView: {
+            /**
+             * Format: uuid
+             * @description The World relation assertion behind this step.
+             */
+            assertion_id: string;
+            /**
+             * @description `OUT` when the step follows the relation from its subject, `IN` when
+             *      it follows it back to the subject.
+             */
+            direction: string;
+            /** @description The relation key, such as `proofline.relation.consumes_api`. */
+            relation: string;
+        };
+        ReachedEntityView: {
+            /**
+             * Format: uuid
+             * @description World's entity ID.
+             */
+            entity_id: string;
+            /** @description The entity's kind, such as `service` or `queue`. */
+            kind: string;
+            /**
+             * @description World's display label for the entity: environment evidence for
+             *      readers of this organization, never published to GitHub.
+             */
+            label: string;
+            /** @description The recorded relation assertions from the deployed root to the entity. */
+            path: components["schemas"]["ReachStepView"][];
+            /** @description World's registry type keys for the entity. */
+            type_keys: string[];
+        };
+        /** @description A recorded refresh decision, as the console shows it. */
+        RefreshView: {
+            /**
+             * @description What decided: `FLOOR`, a refresh rule that always reviews the whole
+             *      change; `JEV`, Proofline's decision model within those rules; or
+             *      `FALLBACK`, the refresh rules because the model did not decide.
+             *      Absent for a full review a person requested, and for reviews decided
+             *      before it was recorded.
+             */
+            decided_by?: string | null;
+            /**
+             * @description `INCREMENTAL` reviews only the files the push touched and carries the
+             *      earlier review's untouched findings forward; `FULL` reviews the whole change.
+             */
+            mode: string;
+            /** @description Why, in words. Server text that may name repository paths. */
+            reason?: string | null;
+            /**
+             * Format: uuid
+             * @description The review this one refreshes. Absent for a full review a person requested.
+             */
+            refreshes_review_id?: string | null;
+        };
         /**
          * @description An environment a refusal names. `external_key` is how its pages are
          *      addressed.
@@ -2637,6 +2858,12 @@ export interface components {
             pull_request_title?: string | null;
             /** @description The pull request on GitHub. Absent for a deployment review or when the repository is unknown. */
             pull_request_url?: string | null;
+            /**
+             * @description How this review decided what it reviews after a push or a full-review
+             *      request. Absent for a review that refreshes nothing, and while a
+             *      refresh has not decided yet.
+             */
+            refresh?: components["schemas"]["RefreshView"] | null;
             /** @description The repository's `owner/name`. Absent when the review names no repository. */
             repository_full_name?: string | null;
             /**
@@ -2994,12 +3221,19 @@ export interface components {
         };
         /** @description What stopping a review recorded. */
         StopResponse: {
-            /** Format: uuid */
+            /**
+             * Format: uuid
+             * @description Identifier of the stopped review.
+             */
             review_id: string;
             /** @description Always `STOPPED`: the review's status once the stop is committed. */
             status: string;
-            /** Format: date-time */
+            /**
+             * Format: date-time
+             * @description Time when the review was stopped.
+             */
             stopped_at: string;
+            /** @description Person who stopped the review. */
             stopped_by: components["schemas"]["ActorView"];
         };
         /**
