@@ -1587,6 +1587,12 @@ export interface components {
              * @description The World snapshot the reach was read at. Null unless `READ`.
              */
             snapshot_id?: string | null;
+            /**
+             * @description The Terraform addresses the reach also started from, or why it took
+             *      none. Absent when the assessment read reach only from the deployed
+             *      revision.
+             */
+            terraform?: components["schemas"]["TerraformRootsView"] | null;
         };
         DeepReviewEscalation: {
             /** @description A fixed customer explanation; internal admission errors are withheld. */
@@ -3345,6 +3351,27 @@ export interface components {
              * @description The GitHub Actions run of a `GITHUB_WORKFLOW_RUN` subject. Absent for other kinds.
              */
             workflow_run_id?: number | null;
+        };
+        /** @enum {string} */
+        TerraformPlanView: "TAKEN" | "NOT_DECLARED" | "NOT_PINNED" | "HEAD_DIFFERS" | "ADDRESSES_UNREPORTED";
+        /** @description The Terraform roots of one declared reach read. */
+        TerraformRootsView: {
+            /** @description The changed resource instance addresses taken as roots. */
+            addresses: string[];
+            /**
+             * Format: uint
+             * @description Changed addresses left out at World's limit of 100 roots per read.
+             */
+            omitted: number;
+            /**
+             * @description `TAKEN` when the plan pinned for the reviewed commit named the roots,
+             *      `NOT_DECLARED` when the environment captures no Terraform plan for this
+             *      review, `NOT_PINNED` when it declares one and none was pinned,
+             *      `HEAD_DIFFERS` when the pinned plan is for another commit, and
+             *      `ADDRESSES_UNREPORTED` when the pinned plan records no changed
+             *      addresses because it was pinned before World reported them.
+             */
+            plan: components["schemas"]["TerraformPlanView"];
         };
         /** @enum {string} */
         ThreadObservationFreshness: "FRESH" | "STALE";
