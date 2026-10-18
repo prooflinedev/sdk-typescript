@@ -728,6 +728,30 @@ export interface components {
             /** @description Whether the diagram was drawn, or why no diagram is available. */
             outcome: components["schemas"]["ChangeDiagramOutcome"];
         };
+        /** @description What a review recorded about its change. */
+        ChangeSummary: {
+            /** @description The compared base commit. Null when the review pinned none. */
+            base_sha?: string | null;
+            /**
+             * @description The changed files the review read, by path, with the depth it read
+             *      them at. Empty when the review recorded no change digest. Files the
+             *      review's filters kept from review are listed apart, with their reason.
+             */
+            files: components["schemas"]["FileFact"][];
+            /** @description The reviewed head commit. */
+            head_sha: string;
+            /**
+             * @description Model-written prose. Present only when `prose_outcome` is `PUBLISHED`.
+             *      It is untrusted text: render it inert.
+             */
+            prose?: components["schemas"]["Prose"] | null;
+            prose_outcome: components["schemas"]["ProseOutcome"];
+            /**
+             * @description The route the summary applied. Null when the review recorded no change
+             *      digest, so no route was asked.
+             */
+            route?: components["schemas"]["SummaryRoute"] | null;
+        };
         /**
          * @description World's lifecycle disclosure for the evaluator version that answered, as
          *      the receipt recorded it. A deployment gate counts only `GATING` results
@@ -1324,6 +1348,14 @@ export interface components {
              */
             change_diagram?: components["schemas"]["ChangeDiagramView"] | null;
             /**
+             * @description What the change does and which files the review read at which depth
+             *      (§55). Null until the review's publication records it, and for a
+             *      review that is not of a pull request. Generated text has current
+             *      credentials and recorded protected values withheld; missing or expired
+             *      provenance withholds the generated text whole.
+             */
+            change_summary?: components["schemas"]["ChangeSummary"] | null;
+            /**
              * @description The GitHub check run Proofline published for this review. Null when
              *      none was published.
              */
@@ -1637,6 +1669,18 @@ export interface components {
         ExportValidation: "UNKNOWN" | "CONFIRMED" | "DISMISSED" | "FIXED" | "ACCEPTED_RISK" | "ALREADY_COVERED";
         /** @enum {string} */
         ExportValidationSource: "ui" | "github_comment" | "proofline";
+        FileFact: {
+            /** Format: int64 */
+            additions: number;
+            /** Format: int64 */
+            deletions: number;
+            depth: components["schemas"]["ReviewDepth"];
+            path: string;
+            /** @description The path before a rename. */
+            previous_path?: string | null;
+            /** @description GitHub's file status: `added`, `modified`, `removed`, `renamed` and so on. */
+            status: string;
+        };
         FileProjection: {
             /** @description The code-inspection depth retained by the plan. */
             depth: string;
@@ -2393,6 +2437,16 @@ export interface components {
             /** @description A short, stable summary of the problem class, such as `not found` or `conflict`. */
             title: string;
         };
+        Prose: {
+            /** @description At most 120 characters. */
+            headline: string;
+            /** @description Paths in the pinned diff the prose calls out. */
+            notable_paths: string[];
+            /** @description At most three of at most 400 characters; one on the `SHORT` route. */
+            paragraphs: string[];
+        };
+        /** @description Why the summary carries prose or does not. */
+        ProseOutcome: "PUBLISHED" | "NO_CHANGE_DIGEST" | "NOT_REQUESTED" | "MODEL_UNAVAILABLE" | "MALFORMED" | "REJECTED" | "UNGROUNDED";
         PullRequestMergeGate: {
             /**
              * Format: int32
@@ -2644,6 +2698,11 @@ export interface components {
              */
             validate_findings: boolean;
         };
+        /**
+         * @description The depth the applied route plan read a file at.
+         * @enum {string}
+         */
+        ReviewDepth: "STANDARD";
         ReviewDiffStats: {
             /**
              * Format: int64
@@ -3352,6 +3411,8 @@ export interface components {
              */
             workflow_run_id?: number | null;
         };
+        /** @enum {string} */
+        SummaryRoute: "DETERMINISTIC_ONLY" | "SHORT" | "FULL";
         /** @enum {string} */
         TerraformPlanView: "TAKEN" | "NOT_DECLARED" | "NOT_PINNED" | "HEAD_DIFFERS" | "ADDRESSES_UNREPORTED";
         /** @description The Terraform roots of one declared reach read. */
