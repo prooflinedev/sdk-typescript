@@ -1423,6 +1423,8 @@ export interface components {
              * @description The review's identifier.
              */
             id: string;
+            /** @description Present and true when this run is a Deep Review. */
+            is_deep_review?: boolean;
             /**
              * @description `PULL_REQUEST`, `DEPLOYMENT`, `PATCH`, a review of local changes
              *      sent as a patch, `COMMIT`, a review of pushed commits, or `FILES`,
