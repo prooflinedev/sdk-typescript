@@ -1588,6 +1588,12 @@ export interface components {
              *      requested without naming a hook.
              */
             trigger_source?: components["schemas"]["PatchTriggerSource"] | null;
+            /**
+             * @description The reviewed head's changed files in reading groups, with a line per
+             *      file. Absent until the walkthrough is stored, and for a review that
+             *      has none.
+             */
+            walkthrough?: components["schemas"]["WalkthroughView"] | null;
         };
         /** @enum {string} */
         Dataset: "reviews" | "finding_outcomes" | "finding_validations" | "spend" | "findings";
@@ -3491,6 +3497,49 @@ export interface components {
         UntrustedText: {
             /** @description The text itself. Render it as plain text only. */
             untrusted_text: string;
+        };
+        WalkthroughFileView: {
+            /** Format: int64 */
+            additions: number;
+            /** @description GitHub's change status, upper case, such as `ADDED` or `RENAMED`. */
+            change: string;
+            /** Format: int64 */
+            deletions: number;
+            /**
+             * @description The route plan's depth tier. Absent for a file the review did not
+             *      evaluate.
+             */
+            depth?: string | null;
+            /** @description Whether `line` is model-authored. */
+            generated: boolean;
+            /** @description A model sentence, or the deterministic line when there is none. */
+            line: string;
+            path: string;
+            previous_path?: string | null;
+            /**
+             * @description Why the review did not evaluate the file, such as `LOCKFILE` or
+             *      `REPOSITORY_FILTER`.
+             */
+            skip_class?: string | null;
+        };
+        WalkthroughGroupView: {
+            description?: string | null;
+            files: components["schemas"]["WalkthroughFileView"][];
+            /**
+             * @description `FEATURE`, `FIX`, `REFACTOR`, `CONFIGURATION`, `INFRASTRUCTURE`,
+             *      `DATA`, `DEPENDENCIES`, `TESTS` or `DOCS`.
+             */
+            kind: string;
+            title: string;
+        };
+        /**
+         * @description One review's walkthrough of its pinned head. Titles and lines are model
+         *      text over untrusted repository content: render them as text.
+         */
+        WalkthroughView: {
+            /** @description Groups in reading order. */
+            groups: components["schemas"]["WalkthroughGroupView"][];
+            head_sha: string;
         };
     };
     responses: never;
