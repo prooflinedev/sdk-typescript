@@ -3499,11 +3499,17 @@ export interface components {
             untrusted_text: string;
         };
         WalkthroughFileView: {
-            /** Format: int64 */
+            /**
+             * Format: int64
+             * @description Lines added.
+             */
             additions: number;
             /** @description GitHub's change status, upper case, such as `ADDED` or `RENAMED`. */
             change: string;
-            /** Format: int64 */
+            /**
+             * Format: int64
+             * @description Lines deleted.
+             */
             deletions: number;
             /**
              * @description The route plan's depth tier. Absent for a file the review did not
@@ -3514,7 +3520,9 @@ export interface components {
             generated: boolean;
             /** @description A model sentence, or the deterministic line when there is none. */
             line: string;
+            /** @description The file's path at the head commit. */
             path: string;
+            /** @description The file's path before a rename. Absent otherwise. */
             previous_path?: string | null;
             /**
              * @description Why the review did not evaluate the file, such as `LOCKFILE` or
@@ -3523,13 +3531,16 @@ export interface components {
             skip_class?: string | null;
         };
         WalkthroughGroupView: {
+            /** @description What the group changes. Absent when the group has no description. */
             description?: string | null;
+            /** @description The group's files. */
             files: components["schemas"]["WalkthroughFileView"][];
             /**
              * @description `FEATURE`, `FIX`, `REFACTOR`, `CONFIGURATION`, `INFRASTRUCTURE`,
              *      `DATA`, `DEPENDENCIES`, `TESTS` or `DOCS`.
              */
             kind: string;
+            /** @description The group's title. */
             title: string;
         };
         /**
@@ -3539,6 +3550,7 @@ export interface components {
         WalkthroughView: {
             /** @description Groups in reading order. */
             groups: components["schemas"]["WalkthroughGroupView"][];
+            /** @description The head commit SHA the walkthrough describes. */
             head_sha: string;
         };
     };
