@@ -10,6 +10,8 @@ export type StartAgentSessionBody = NonNullable<paths["/api/v1/organizations/{or
 export type GetFindingFixPromptParameters = paths["/api/v1/organizations/{org_id}/findings/{finding_id}/fix-prompt"]["get"]["parameters"];
 export type RequestCommitReviewParameters = paths["/api/v1/organizations/{org_id}/repositories/{repo_id}/commit-reviews"]["post"]["parameters"];
 export type RequestCommitReviewBody = NonNullable<paths["/api/v1/organizations/{org_id}/repositories/{repo_id}/commit-reviews"]["post"]["requestBody"]>["content"]["application/json"];
+export type UploadCoverageReportsParameters = paths["/api/v1/organizations/{org_id}/repositories/{repo_id}/coverage-reports"]["post"]["parameters"];
+export type UploadCoverageReportsBody = NonNullable<paths["/api/v1/organizations/{org_id}/repositories/{repo_id}/coverage-reports"]["post"]["requestBody"]>["content"]["application/json"];
 export type RequestFileReviewParameters = paths["/api/v1/organizations/{org_id}/repositories/{repo_id}/file-reviews"]["post"]["parameters"];
 export type RequestFileReviewBody = NonNullable<paths["/api/v1/organizations/{org_id}/repositories/{repo_id}/file-reviews"]["post"]["requestBody"]>["content"]["application/json"];
 export type RequestPatchReviewParameters = paths["/api/v1/organizations/{org_id}/repositories/{repo_id}/patch-reviews"]["post"]["parameters"];
@@ -53,6 +55,10 @@ export class Operations {
 
   requestCommitReview(parameters: RequestCommitReviewParameters, body: RequestCommitReviewBody): Promise<components["schemas"]["CommitReviewResponse"]> {
     return this.invoke("POST", "/api/v1/organizations/{org_id}/repositories/{repo_id}/commit-reviews", parameters, body);
+  }
+
+  uploadCoverageReports(parameters: UploadCoverageReportsParameters, body: UploadCoverageReportsBody): Promise<components["schemas"]["CoverageUploadResponse"]> {
+    return this.invoke("POST", "/api/v1/organizations/{org_id}/repositories/{repo_id}/coverage-reports", parameters, body);
   }
 
   requestFileReview(parameters: RequestFileReviewParameters, body: RequestFileReviewBody): Promise<components["schemas"]["FileReviewResponse"]> {

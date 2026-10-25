@@ -144,6 +144,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/organizations/{org_id}/repositories/{repo_id}/coverage-reports": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Upload coverage reports
+         * @description Records the LCOV, Cobertura, JaCoCo or Go coverage reports a CI run produced for one exact commit GitHub has in the repository, for COVERAGE checks that accept uploads. A branch, tag or abbreviated SHA, or a report that cannot be read, gets 422 and stores nothing. Requires a repository-restricted token and live GitHub write access; the same reports for the same commit return the report already recorded.
+         */
+        post: operations["upload_coverage_reports"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/organizations/{org_id}/repositories/{repo_id}/file-reviews": {
         parameters: {
             query?: never;
@@ -837,6 +857,60 @@ export interface components {
             attribution_digest: string;
             /** @description The evaluation World recorded, which holds every condition. */
             world_evaluation_id: string;
+        };
+        /**
+         * @description An upload refused for its content: a symbolic or unknown commit, or a
+         *      report that cannot be read. Nothing is stored.
+         */
+        CoverageRefused: {
+            /** @description One sentence naming what was refused and why. */
+            detail: string;
+            /**
+             * Format: uint16
+             * @description Always 422.
+             */
+            status: number;
+            /** @description Always `unprocessable coverage upload`. */
+            title: string;
+        };
+        /** @description The coverage reports a CI run produced for one commit. */
+        CoverageUploadRequest: {
+            /**
+             * @description One to 50 reports, each LCOV, Cobertura XML, `JaCoCo` XML or a Go
+             *      cover profile, in a JSON body of at most 64 MiB.
+             */
+            reports: components["schemas"]["UploadedReport"][];
+            /**
+             * @description The full 40-character commit the tests ran on. GitHub must have it in
+             *      this repository. A merge commit counts for a pull request head that is
+             *      one of its two parents.
+             */
+            tested_sha: string;
+        };
+        /** @description The report the upload recorded, or the one an identical upload recorded. */
+        CoverageUploadResponse: {
+            /**
+             * Format: uint64
+             * @description Covered lines among those instrumented lines.
+             */
+            covered_lines: number;
+            /** @description False when the same reports for this commit were already recorded. */
+            created: boolean;
+            /** @description The format of each report, in upload order. */
+            formats: string[];
+            /**
+             * Format: uint64
+             * @description Instrumented lines across the reports, a file two reports name under
+             *      one path counted once.
+             */
+            instrumented_lines: number;
+            /**
+             * Format: uuid
+             * @description The recorded report.
+             */
+            report_id: string;
+            /** @description The commit the reports tested, as the upload named it. */
+            tested_sha: string;
         };
         CustomerAssessment: {
             /** @description The deterministic World checks recorded for this assessment. */
@@ -3503,6 +3577,15 @@ export interface components {
             /** @description The text itself. Render it as plain text only. */
             untrusted_text: string;
         };
+        UploadedReport: {
+            /** @description The report text, exactly as the coverage tool wrote it. */
+            content: string;
+            /**
+             * @description A relative name for the report, such as `web/lcov.info`, unique in
+             *      the upload.
+             */
+            name: string;
+        };
         WalkthroughFileView: {
             /**
              * Format: int64
@@ -3821,6 +3904,64 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RunNowRefused"];
+                };
+            };
+            /** @description An RFC 9457 problem; the HTTP status remains authoritative. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    upload_coverage_reports: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                org_id: string;
+                repo_id: string;
+            };
+            cookie?: never;
+        };
+        /** @description The coverage reports a CI run produced for one commit. */
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CoverageUploadRequest"];
+            };
+        };
+        responses: {
+            /** @description The report the upload recorded, or the one an identical upload recorded. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CoverageUploadResponse"];
+                };
+            };
+            /** @description The report the upload recorded, or the one an identical upload recorded. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CoverageUploadResponse"];
+                };
+            };
+            /**
+             * @description An upload refused for its content: a symbolic or unknown commit, or a
+             *      report that cannot be read. Nothing is stored.
+             */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CoverageRefused"];
                 };
             };
             /** @description An RFC 9457 problem; the HTTP status remains authoritative. */
