@@ -276,8 +276,14 @@ test("coverage uploads preserve the tested commit, report text and server refusa
   const body = {
     tested_sha: "c".repeat(40),
     reports: [
-      { name: "web/lcov.info", content: "SF:src/app.ts\nDA:1,1\nend_of_record\n" },
-      { name: "go/coverage.out", content: "mode: set\nexample/main.go:1.1,1.2 1 0\n" },
+      {
+        name: "web/lcov.info",
+        content: "SF:src/app.ts\nDA:1,1\nend_of_record\n",
+      },
+      {
+        name: "go/coverage.out",
+        content: "mode: set\nexample/main.go:1.1,1.2 1 0\n",
+      },
     ],
   };
   const parameters = { path: { org_id: orgId, repo_id: repoId } };
@@ -312,12 +318,15 @@ test("coverage uploads preserve the tested commit, report text and server refusa
   for (const refusalStatus of [422, 403, 404]) {
     status = refusalStatus;
     const before = fixture.calls.length;
-    await assert.rejects(client.uploadCoverageReports(parameters, body), (error) => {
-      assert(error instanceof ProoflineError);
-      assert.equal(error.status, status);
-      assert.equal(error.detail, responseCanary);
-      return true;
-    });
+    await assert.rejects(
+      client.uploadCoverageReports(parameters, body),
+      (error) => {
+        assert(error instanceof ProoflineError);
+        assert.equal(error.status, status);
+        assert.equal(error.detail, responseCanary);
+        return true;
+      },
+    );
     assert.equal(fixture.calls.length - before, 1);
   }
   for (const call of fixture.calls) {
