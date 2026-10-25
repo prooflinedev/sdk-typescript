@@ -1,3 +1,11 @@
+import {
+  decodeExport,
+  type ExportPage,
+  type ExportParameters,
+} from "./exports.js";
+
+export type { ExportPage, ExportParameters } from "./exports.js";
+
 import { type ListReviewsParameters, Operations } from "./operations.js";
 import type { components } from "./schema.js";
 import { type ClientOptions, sleep, Transport } from "./transport.js";
@@ -52,6 +60,21 @@ export class ProoflineClient extends Operations {
       transport.request(method, path, parameters, undefined, body),
     );
     this.#transport = transport;
+  }
+
+  async exportReviews(parameters: ExportParameters): Promise<ExportPage> {
+    const format = parameters.query.format ?? "ndjson";
+    if (format !== "csv" && format !== "ndjson")
+      throw new TypeError("export format must be csv or ndjson");
+    return this.#transport.request(
+      "GET",
+      "/api/v1/organizations/{org_id}/exports/{dataset}",
+      parameters,
+      undefined,
+      undefined,
+      (text, headers) => decodeExport(text, headers, format),
+      format === "csv" ? "text/csv" : "application/x-ndjson",
+    );
   }
 
   async *iterReviews(

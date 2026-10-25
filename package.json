@@ -1,6 +1,6 @@
 {
   "name": "@proofline/sdk",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Typed clients for the token-scoped Proofline review API",
   "type": "module",
   "license": "Apache-2.0",

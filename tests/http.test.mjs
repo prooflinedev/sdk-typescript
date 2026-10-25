@@ -213,7 +213,7 @@ test("all twelve generated methods use the authenticated token surface and prese
     fixture.calls.every(
       (call) =>
         call.authorization === `Bearer ${token}` &&
-        call.userAgent === "proofline-typescript/1.0.1" &&
+        call.userAgent === "proofline-typescript/1.0.2" &&
         call.contentType === undefined &&
         call.body === "",
     ),
@@ -829,5 +829,50 @@ test("credentials remain on the configured origin and malformed responses carry 
   await assert.rejects(
     client.getReview({ path: { org_id: "..", review_id: reviewId } }),
     TypeError,
+  );
+});
+
+test("exports preserve CSV cells, opaque cursors and tenant authorization failures", async (t) => {
+  const { baseUrl, calls } = await server(t, (request, response) => {
+    if (request.url.includes("cursor=refused"))
+      return json(response, 404, { detail: "not found" });
+    const csv = request.url.includes("format=csv");
+    response.writeHead(200, {
+      "content-type": csv ? "text/csv" : "application/x-ndjson",
+      "x-proofline-export-version": "1",
+      "x-proofline-export-settled-until": "2026-10-25T00:00:00Z",
+      "x-proofline-export-next-cursor": "opaque/+cursor",
+    });
+    response.end(
+      csv
+        ? 'dataset_version,claim\r\n1,"comma, quote "" and\nnewline"\r\n'
+        : '{"dataset_version":1,"claim":"hello"}\n',
+    );
+  });
+  const client = new ProoflineClient({ baseUrl, token });
+  const parameters = {
+    path: { org_id: orgId, dataset: "findings" },
+    query: {
+      from: "2026-10-01T00:00:00Z",
+      to: "2026-10-25T00:00:00Z",
+      format: "csv",
+    },
+  };
+  const page = await client.exportReviews(parameters);
+  assert.equal(page.rows[0].claim, 'comma, quote " and\nnewline');
+  assert.equal(page.nextCursor, "opaque/+cursor");
+  const next = await client.exportReviews({
+    ...parameters,
+    query: { ...parameters.query, format: "ndjson", cursor: page.nextCursor },
+  });
+  assert.equal(next.rows[0].dataset_version, 1);
+  assert.match(calls[1].url, /cursor=opaque%2F%2Bcursor/);
+  assert.equal(calls[0].authorization, `Bearer ${token}`);
+  await assert.rejects(
+    client.exportReviews({
+      ...parameters,
+      query: { ...parameters.query, cursor: "refused" },
+    }),
+    (error) => error instanceof ProoflineError && error.status === 404,
   );
 });

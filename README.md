@@ -23,6 +23,24 @@ and [API reference](https://proofline.sh/docs/api/) cover every operation.
 
 Licensed under the Apache License, Version 2.0.
 
+## Exports
+
+`exportReviews` reads one CSV or NDJSON page through the existing bounded transport.
+It returns the original text, decoded rows, dataset version, settled horizon and
+optional next cursor. CSV cells remain strings, including nested JSON cells;
+NDJSON retains JSON values. Export tokens need `analytics:read`.
+Repeat with the returned cursor and the same dataset, window, format and grouping.
+A missing next cursor marks the last page. Each CSV page includes its own header.
+
+```typescript
+const page = await client.exportReviews({
+  path: { org_id: process.env.PROOFLINE_ORGANIZATION_ID!, dataset: "reviews" },
+  query: { from: "2026-10-01T00:00:00Z", to: "2026-10-25T00:00:00Z", format: "csv" },
+});
+process.stdout.write(page.text);
+// Continue with query.cursor = page.nextCursor when it is not null.
+```
+
 ## Development
 
 The repository bundles its public API contract in `openapi.public.json`.
