@@ -272,6 +272,66 @@ test("all twelve generated methods use the authenticated token surface and prese
   assert.equal(fixture.calls.at(-1).body, '{"mode":"FULL"}');
 });
 
+test("coverage uploads preserve the tested commit, report text and server refusals", async (t) => {
+  const body = {
+    tested_sha: "c".repeat(40),
+    reports: [
+      { name: "web/lcov.info", content: "SF:src/app.ts\nDA:1,1\nend_of_record\n" },
+      { name: "go/coverage.out", content: "mode: set\nexample/main.go:1.1,1.2 1 0\n" },
+    ],
+  };
+  const parameters = { path: { org_id: orgId, repo_id: repoId } };
+  const recorded = {
+    report_id: findingId,
+    tested_sha: body.tested_sha,
+    created: true,
+    formats: ["LCOV", "GO"],
+    instrumented_lines: 2,
+    covered_lines: 1,
+  };
+  let status = 201;
+  const fixture = await server(t, (_request, response) => {
+    if (status < 400) {
+      return json(response, status, { ...recorded, created: status === 201 });
+    }
+    return json(
+      response,
+      status,
+      { title: "coverage upload refused", status, detail: responseCanary },
+      { "Content-Type": "application/problem+json" },
+    );
+  });
+  const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
+  for (const resultStatus of [201, 200]) {
+    status = resultStatus;
+    assert.deepEqual(await client.uploadCoverageReports(parameters, body), {
+      ...recorded,
+      created: status === 201,
+    });
+  }
+  for (const refusalStatus of [422, 403, 404]) {
+    status = refusalStatus;
+    const before = fixture.calls.length;
+    await assert.rejects(client.uploadCoverageReports(parameters, body), (error) => {
+      assert(error instanceof ProoflineError);
+      assert.equal(error.status, status);
+      assert.equal(error.detail, responseCanary);
+      return true;
+    });
+    assert.equal(fixture.calls.length - before, 1);
+  }
+  for (const call of fixture.calls) {
+    assert.equal(call.method, "POST");
+    assert.equal(
+      call.url,
+      `/api/v1/organizations/${orgId}/repositories/${repoId}/coverage-reports`,
+    );
+    assert.equal(call.authorization, `Bearer ${token}`);
+    assert.equal(call.contentType, "application/json");
+    assert.deepEqual(JSON.parse(call.body), body);
+  }
+});
+
 test("review reads preserve summaries, withheld prose and exact code identity", async (t) => {
   const summary = {
     head_sha: "a".repeat(40),
