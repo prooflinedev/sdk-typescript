@@ -285,7 +285,7 @@ test("coverage uploads preserve the tested commit, report text and server refusa
     report_id: findingId,
     tested_sha: body.tested_sha,
     created: true,
-    formats: ["LCOV", "GO"],
+    formats: ["LCOV", "GO_PROFILE"],
     instrumented_lines: 2,
     covered_lines: 1,
   };
