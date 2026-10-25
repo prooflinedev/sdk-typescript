@@ -55,8 +55,7 @@ for (const [path, item] of Object.entries(document.paths)) {
           "export_reviews requires its declared metadata stream and row schemas",
         );
       }
-      // These transports decode JSON. The metadata file uses the public
-      // HTTP contract, rather than a convenience method with a false type.
+      // The handwritten export helper decodes the two stream formats and headers.
       continue;
     }
     if (

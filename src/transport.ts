@@ -1,4 +1,4 @@
-const VERSION = "1.0.1";
+const VERSION = "1.0.2";
 const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
 const MAX_RETRIES = 3;
 const MAX_RETRY_SECONDS = 60;
@@ -130,11 +130,12 @@ function positive(value: number, name: string): number {
   return value;
 }
 
-async function json(
+async function decoded(
   response: Response,
   deadline: number,
   signal: AbortSignal,
   waitTimeout: boolean,
+  decode: (text: string, headers: Headers) => unknown,
 ): Promise<unknown> {
   const reader = response.body?.getReader();
   if (!reader) {
@@ -167,9 +168,10 @@ async function json(
       data.set(chunk, offset);
       offset += chunk.length;
     }
-    return JSON.parse(
-      new TextDecoder("utf-8", { fatal: true }).decode(data),
-    ) as unknown;
+    const text = new TextDecoder("utf-8", { fatal: true }).decode(data);
+    return response.ok
+      ? decode(text, response.headers)
+      : (JSON.parse(text) as unknown);
   } catch (error) {
     if (error instanceof ProoflineError) throw error;
     if (response.ok && (signal.aborted || performance.now() >= deadline))
@@ -287,6 +289,9 @@ export class Transport {
     parameters: Parameters,
     deadline?: number,
     body?: object,
+    decode: (text: string, headers: Headers) => unknown = (text) =>
+      JSON.parse(text),
+    accept = "application/json, application/problem+json",
   ): Promise<T> {
     const path = Object.entries(parameters.path ?? {}).reduce(
       (value, [key, coordinateValue]) =>
@@ -303,7 +308,7 @@ export class Transport {
     const requestBody = body === undefined ? undefined : JSON.stringify(body);
     for (let attempt = 0; ; attempt += 1) {
       const headers = new Headers({
-        Accept: "application/json, application/problem+json",
+        Accept: accept,
         "User-Agent": `proofline-typescript/${VERSION}`,
       });
       if (requestBody !== undefined)
@@ -346,7 +351,13 @@ export class Transport {
           "the request did not receive a response within its timeout",
         );
       }
-      const value = await json(response, requestDeadline, signal, waitTimeout);
+      const value = await decoded(
+        response,
+        requestDeadline,
+        signal,
+        waitTimeout,
+        decode,
+      );
       if (response.ok) return value as T;
       const error = problem(response.status, value);
       const delay = retryDelay(response.headers.get("Retry-After"), attempt);
