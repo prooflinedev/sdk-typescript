@@ -1403,6 +1403,11 @@ export interface components {
              */
             finding_count: number;
             /**
+             * @description Whether fix generation is configured for this deployment and organization.
+             *      Write authorization is checked again when a fix is requested.
+             */
+            fix_generation_enabled?: boolean;
+            /**
              * @description The head commit this review is pinned to. For a patch review, the
              *      revision ID Proofline derives from its base commit and patch digest,
              *      which is not a commit. Absent when the review recorded none.
