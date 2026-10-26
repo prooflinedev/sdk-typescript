@@ -213,7 +213,7 @@ test("all twelve generated methods use the authenticated token surface and prese
     fixture.calls.every(
       (call) =>
         call.authorization === `Bearer ${token}` &&
-        call.userAgent === "proofline-typescript/1.0.2" &&
+        call.userAgent === "proofline-typescript/1.0.3" &&
         call.contentType === undefined &&
         call.body === "",
     ),
@@ -944,4 +944,54 @@ test("exports preserve CSV cells, opaque cursors and tenant authorization failur
     }),
     (error) => error instanceof ProoflineError && error.status === 404,
   );
+});
+
+test("knowledge negotiates MCP and preserves scoped refusals without retry", async (t) => {
+  let refusal = false;
+  let wrongId = false;
+  const { baseUrl, calls } = await server(t, (request, response, seen) => {
+    const body = JSON.parse(seen.at(-1).body);
+    assert.equal(request.url, "/mcp");
+    assert.equal(request.headers.authorization, `Bearer ${token}`);
+    if (body.method === "initialize") {
+      json(response, 200, {
+        jsonrpc: "2.0",
+        id: 1,
+        result: { protocolVersion: "2025-11-25" },
+      });
+    } else if (body.method === "notifications/initialized") {
+      assert.equal(request.headers["mcp-protocol-version"], "2025-11-25");
+      response.writeHead(202);
+      response.end();
+    } else {
+      assert.equal(body.params.name, "get_wiki_page");
+      assert.deepEqual(body.params.arguments, {
+        repository: "owner/name",
+        page_key: "index",
+        commit: "a".repeat(40),
+      });
+      if (refusal) json(response, 503, { detail: "unavailable" });
+      else
+        json(response, 200, {
+          jsonrpc: "2.0",
+          id: wrongId ? 99 : 2,
+          result: {
+            isError: true,
+            content: [{ type: "text", text: "RESOURCE_NOT_FOUND" }],
+          },
+        });
+    }
+  });
+  const client = new ProoflineClient({ baseUrl, token });
+  const args = {
+    repository: "owner/name",
+    page_key: "index",
+    commit: "a".repeat(40),
+  };
+  assert.equal((await client.knowledge.getWikiPage(args)).isError, true);
+  wrongId = true;
+  await assert.rejects(client.knowledge.getWikiPage(args), ProoflineError);
+  refusal = true;
+  await assert.rejects(client.knowledge.getWikiPage(args), ProoflineError);
+  assert.equal(calls.length, 9);
 });
