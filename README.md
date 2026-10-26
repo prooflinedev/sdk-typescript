@@ -112,3 +112,27 @@ Each call initializes MCP and makes one tool request without retries, including
 questions and implementation starts. Protocol and HTTP errors throw `ProoflineError`;
 tool refusals retain `isError` for the caller to inspect. Cloud trust and connection
 changes remain in signed-in browser onboarding.
+
+## Fix context and re-verification
+
+`client.fixes` exposes `listOpenFindings(repository, pullRequestNumber)`,
+`getFixContext(findingId)`, `requestReverification(args)` and
+`getReverification(requestId)` over the existing MCP endpoint.
+
+```ts
+const result = await client.fixes.requestReverification({
+  review_id: reviewId,
+  finding_ids: [findingId],
+  commit_sha: pushedCommitSha,
+  note: "Fixed the null case and added a regression test.",
+});
+if (result.isError) throw new Error("Re-verification was refused.");
+```
+
+The commit must be the live pushed head; the server confirms it. The request
+accepts 1–20 distinct findings of one review and an optional 1–2,000-character
+note. Reads need `reviews:read`; requesting verification also needs
+`reviews:request` and repository write access. Calls never retry.
+Results retain untrusted-text wrappers, availability, assessment gaps and
+`isError`. `PENDING` and `NOT_VERIFIED` do not establish a fix. A tool request
+never records a human disposition.

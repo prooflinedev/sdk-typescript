@@ -1,3 +1,7 @@
+import { FixesClient } from "./fixes.js";
+
+export type { ReverificationRequest } from "./fixes.js";
+
 import { KnowledgeClient } from "./knowledge.js";
 
 export type { KnowledgeResult, RepositoryKnowledge } from "./knowledge.js";
@@ -58,6 +62,7 @@ export interface WaitOptions {
 export class ProoflineClient extends Operations {
   readonly #transport: Transport;
   readonly knowledge: KnowledgeClient;
+  readonly fixes: FixesClient;
 
   constructor(options: ClientOptions) {
     const transport = new Transport(options);
@@ -66,6 +71,7 @@ export class ProoflineClient extends Operations {
     );
     this.#transport = transport;
     this.knowledge = new KnowledgeClient(transport);
+    this.fixes = new FixesClient(transport);
   }
 
   async exportReviews(parameters: ExportParameters): Promise<ExportPage> {
