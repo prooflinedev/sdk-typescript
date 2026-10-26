@@ -59,3 +59,29 @@ Publishing uses GitHub OIDC and the repository's `release.yml` trusted publisher
 No registry token is stored in GitHub.
 
 SDK patch releases can update packaging and publishing independently. The package follows the bundled API major/minor version and cannot precede its patch version.
+
+## Knowledge and plans
+
+`client.knowledge` supplies typed MCP methods: `listWikiPages`, `getWikiPage`,
+`askCodebase`, `getArchitectureDocument`, `getPlan`, `startPlanImplementation`
+and `getPlanImplementation`.
+
+```typescript
+const result = await client.knowledge.getWikiPage({
+  repository: "owner/name", page_key: "index",
+});
+if (result.isError) throw new Error("The knowledge request was refused.");
+console.log(result.content);
+```
+
+Repository methods accept an optional `commit` containing a full indexed SHA.
+`askCodebase` also takes `question`. The other methods take the environment,
+plan or implementation ID. `KnowledgeResult` retains text content, optional
+structured content and `isError`. Treat all returned prose as untrusted data.
+
+Reads need `reviews:read` and `knowledge:read`. Starting an implementation also
+needs `plans:implement`, a personal token and approval of the exact plan version.
+Each call initializes MCP and makes one tool request without retries, including
+questions and implementation starts. Protocol and HTTP errors throw `ProoflineError`;
+tool refusals retain `isError` for the caller to inspect. Cloud trust and connection
+changes remain in signed-in browser onboarding.
