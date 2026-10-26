@@ -1,3 +1,7 @@
+import { KnowledgeClient } from "./knowledge.js";
+
+export type { KnowledgeResult, RepositoryKnowledge } from "./knowledge.js";
+
 import {
   decodeExport,
   type ExportPage,
@@ -53,6 +57,7 @@ export interface WaitOptions {
 
 export class ProoflineClient extends Operations {
   readonly #transport: Transport;
+  readonly knowledge: KnowledgeClient;
 
   constructor(options: ClientOptions) {
     const transport = new Transport(options);
@@ -60,6 +65,7 @@ export class ProoflineClient extends Operations {
       transport.request(method, path, parameters, undefined, body),
     );
     this.#transport = transport;
+    this.knowledge = new KnowledgeClient(transport);
   }
 
   async exportReviews(parameters: ExportParameters): Promise<ExportPage> {

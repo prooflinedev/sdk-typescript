@@ -292,6 +292,7 @@ export class Transport {
     decode: (text: string, headers: Headers) => unknown = (text) =>
       JSON.parse(text),
     accept = "application/json, application/problem+json",
+    mcpPhase?: "initialize" | "notification" | "call",
   ): Promise<T> {
     const path = Object.entries(parameters.path ?? {}).reduce(
       (value, [key, coordinateValue]) =>
@@ -306,6 +307,8 @@ export class Transport {
         url.searchParams.set(key, String(value));
     }
     const requestBody = body === undefined ? undefined : JSON.stringify(body);
+    if (mcpPhase && new TextEncoder().encode(requestBody).length > 8192)
+      throw new TypeError("MCP request exceeds 8192 bytes");
     for (let attempt = 0; ; attempt += 1) {
       const headers = new Headers({
         Accept: accept,
@@ -313,6 +316,11 @@ export class Transport {
       });
       if (requestBody !== undefined)
         headers.set("Content-Type", "application/json");
+      if (mcpPhase) {
+        headers.set("Origin", this.#base.origin);
+        if (mcpPhase !== "initialize")
+          headers.set("MCP-Protocol-Version", "2025-11-25");
+      }
       this.#token.apply(headers);
       const now = performance.now();
       const waitRemaining =
@@ -350,6 +358,24 @@ export class Transport {
           "urn:proofline:sdk:transport",
           "the request did not receive a response within its timeout",
         );
+      }
+      if (mcpPhase && response.ok) {
+        const notification = mcpPhase === "notification";
+        if (
+          response.status !== (notification ? 202 : 200) ||
+          response.headers.has("mcp-session-id") ||
+          (!notification &&
+            response.headers.get("content-type")?.split(";")[0]?.trim() !==
+              "application/json")
+        ) {
+          await response.body?.cancel();
+          throw new ProoflineError(
+            0,
+            "urn:proofline:sdk:mcp",
+            "Unsupported MCP response",
+          );
+        }
+        if (notification && !response.body) return undefined as T;
       }
       const value = await decoded(
         response,
