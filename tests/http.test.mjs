@@ -926,3 +926,64 @@ test("knowledge negotiates MCP and preserves scoped refusals without retry", asy
   await assert.rejects(client.knowledge.getWikiPage(args), ProoflineError);
   assert.equal(calls.length, 9);
 });
+
+test("fix helpers preserve unavailable context and never retry a verification request", async (t) => {
+  const observed = [];
+  let refuse = false;
+  const result = {
+    content: [{ type: "text", text: "untrusted source" }],
+    structuredContent: { status: "UNAVAILABLE", items: null },
+  };
+  const { baseUrl } = await server(t, (request, response, seen) => {
+    const body = JSON.parse(seen.at(-1).body);
+    assert.equal(request.headers.authorization, `Bearer ${token}`);
+    if (body.method === "initialize")
+      return json(response, 200, {
+        jsonrpc: "2.0",
+        id: 1,
+        result: { protocolVersion: "2025-11-25" },
+      });
+    if (body.method === "notifications/initialized") {
+      response.writeHead(202);
+      return response.end();
+    }
+    observed.push(body.params);
+    if (refuse)
+      return json(
+        response,
+        503,
+        { detail: "unavailable" },
+        { "Retry-After": "0" },
+      );
+    return json(response, 200, { jsonrpc: "2.0", id: 2, result });
+  });
+  const client = new ProoflineClient({ baseUrl, token });
+  assert.deepEqual(
+    await client.fixes.listOpenFindings("owner/name", 7),
+    result,
+  );
+  assert.deepEqual(await client.fixes.getFixContext(reviewId), result);
+  const args = {
+    review_id: reviewId,
+    finding_ids: [reviewId],
+    commit_sha: "a".repeat(40),
+    note: "fixed code",
+  };
+  assert.deepEqual(await client.fixes.requestReverification(args), result);
+  assert.deepEqual(await client.fixes.getReverification(reviewId), result);
+  assert.deepEqual(observed, [
+    {
+      name: "list_open_findings",
+      arguments: { repository: "owner/name", pull_request_number: 7 },
+    },
+    { name: "get_fix_context", arguments: { finding_id: reviewId } },
+    { name: "request_reverification", arguments: args },
+    { name: "get_reverification", arguments: { request_id: reviewId } },
+  ]);
+  refuse = true;
+  await assert.rejects(
+    client.fixes.requestReverification(args),
+    ProoflineError,
+  );
+  assert.equal(observed.length, 5);
+});
