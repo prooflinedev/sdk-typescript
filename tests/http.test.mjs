@@ -213,7 +213,7 @@ test("all twelve generated methods use the authenticated token surface and prese
     fixture.calls.every(
       (call) =>
         call.authorization === `Bearer ${token}` &&
-        call.userAgent === "proofline-typescript/1.0.3" &&
+        call.userAgent === "proofline-typescript/1.0.4" &&
         call.contentType === undefined &&
         call.body === "",
     ),
