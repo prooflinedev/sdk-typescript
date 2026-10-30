@@ -1299,6 +1299,11 @@ export interface components {
              */
             lifecycle_state: string;
             /**
+             * @description Earlier occurrences in the author's local reviews linked by exact patch
+             *      identity. These links carry no verdict or finding decision.
+             */
+            local_findings?: components["schemas"]["MatchedLocalFinding"][];
+            /**
              * @description Where this review's comment gate placed the finding, as it recorded
              *      the placement. Null when the review recorded none.
              */
@@ -2285,6 +2290,24 @@ export interface components {
          * @enum {string}
          */
         LocalReverificationOutcome: "RESOLVED_VERIFIED" | "STILL_PRESENT" | "NOT_VERIFIED" | "PENDING";
+        /** @description A local occurrence with the same semantic fingerprint as this finding. */
+        MatchedLocalFinding: {
+            /**
+             * Format: date-time
+             * @description When the local review was requested.
+             */
+            created_at: string;
+            /**
+             * Format: uuid
+             * @description The occurrence in that local review.
+             */
+            finding_id: string;
+            /**
+             * Format: uuid
+             * @description The author's local review, linked by exact patch identity.
+             */
+            review_id: string;
+        };
         NotAssessedView: {
             /**
              * @description The display name of the environment whose assessment is not
