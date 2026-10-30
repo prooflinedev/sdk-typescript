@@ -1733,6 +1733,31 @@ export interface components {
             /** @description `CONSIDERED` or `SKIPPED`. */
             status: string;
         };
+        /** @description A published occurrence of an unresolved series absent from the current run. */
+        EarlierOpenFinding: {
+            /**
+             * Format: uuid
+             * @description The occurrence in the series' first published review.
+             */
+            finding_id: string;
+            /**
+             * Format: uuid
+             * @description The unresolved environment finding series counted for this run.
+             */
+            finding_series_id: string;
+            /**
+             * Format: uuid
+             * @description The first published review containing this occurrence.
+             */
+            review_id: string;
+            /**
+             * Format: int64
+             * @description The earlier pull-request run that contains this occurrence.
+             */
+            run_number: number;
+            /** @description Severity used by the series count; the linked occurrence may be less severe. */
+            severity: string;
+        };
         /** @enum {string} */
         EvidenceView: "REQUIRED_PROPERTIES_ESTABLISHED" | "INCOMPLETE" | "NO_APPLICABLE_OBLIGATIONS";
         /** @enum {string} */
@@ -2371,6 +2396,8 @@ export interface components {
              * @description Finding series whose current decision is an unexpired `ACCEPTED_RISK`.
              */
             accepted_risks: number;
+            /** @description Exact published occurrences of earlier unresolved environment findings. */
+            earlier_findings?: components["schemas"]["EarlierOpenFinding"][];
             /** @description Recorded assessment gaps, including explicit policy exclusions. */
             not_assessed: components["schemas"]["NotAssessedView"][];
             /**
@@ -2842,6 +2869,11 @@ export interface components {
              *      GitHub. Null when no pull request state is recorded.
              */
             current_head_sha?: string | null;
+            /**
+             * @description Exact published occurrences of earlier unresolved environment findings.
+             *      Absent from observations recorded before destinations were captured.
+             */
+            earlier_findings?: components["schemas"]["EarlierOpenFinding"][];
             /**
              * @description This review's environment assessments that are not `COMPLETED`, ordered
              *      by environment key.
