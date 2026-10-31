@@ -781,6 +781,46 @@ export interface components {
          */
         CheckLifecycle: "GATING" | "SHADOW" | "QUARANTINED" | "RETIRED" | "UNKNOWN";
         /**
+         * @description What the control plane records as a failure's cause.
+         * @enum {string}
+         */
+        CiFailureAttribution: "CAUSED_BY_CHANGE" | "PRE_EXISTING_ON_BASE" | "FLAKY_OR_INFRASTRUCTURE" | "ENVIRONMENT_STATE" | "UNKNOWN";
+        /** @description One failed CI job as the Check states it. */
+        CiFailureLine: {
+            /**
+             * @description The recorded cause: `CAUSED_BY_CHANGE`, `PRE_EXISTING_ON_BASE`,
+             *      `FLAKY_OR_INFRASTRUCTURE`, `ENVIRONMENT_STATE` or `UNKNOWN`. `UNKNOWN`
+             *      means the failure was not diagnosed, and `undiagnosed` says why.
+             */
+            attribution: components["schemas"]["CiFailureAttribution"];
+            /**
+             * @description The first failed step's name, admitted the same way. Null when no
+             *      step concluded as failed.
+             */
+            failed_step?: string | null;
+            /**
+             * @description The job's name as the diagnosis admitted it: masked, or `<withheld>`.
+             *      A protected value of the observing review reads as the withheld
+             *      marker.
+             */
+            job_name: string;
+            /**
+             * Format: int64
+             * @description The GitHub Actions run attempt the job failed in, from 1. The line
+             *      is the newest diagnosed attempt of its run.
+             */
+            run_attempt: number;
+            /** @description Whether the job timed out rather than failed. */
+            timed_out: boolean;
+            /**
+             * @description Why the failure was not diagnosed. Set exactly when `attribution` is
+             *      `UNKNOWN`.
+             */
+            undiagnosed?: components["schemas"]["CiFailureUndiagnosed"] | null;
+        };
+        /** @description Why a failed job's attribution is `UNKNOWN`. */
+        CiFailureUndiagnosed: "LOG_UNAVAILABLE" | "LOG_TOO_LARGE" | "LOG_NOT_ADMITTED" | "DECISION_UNAVAILABLE" | "SHADOW" | "UNDETERMINED";
+        /**
          * @description A code assessment's recorded execution status. It is never a verdict on
          *      the change: only `COMPLETED` says the assessment covered what it read.
          */
@@ -2881,6 +2921,29 @@ export interface components {
              * @description Finding series whose current decision is an unexpired `ACCEPTED_RISK`.
              */
             accepted_risk_count: number;
+            /**
+             * @description Failed CI jobs diagnosed on the reviewed head, the newest diagnosed
+             *      attempt of each run, in diagnosis order. The Check states each one;
+             *      none is a Proofline open item. Absent when no job was diagnosed.
+             */
+            ci_failures?: components["schemas"]["CiFailureLine"][];
+            /**
+             * Format: uint64
+             * @description Diagnosed failed CI jobs on the reviewed head beyond `ci_failures`.
+             */
+            ci_failures_omitted?: number;
+            /**
+             * Format: uint64
+             * @description Failed CI run attempts on the reviewed head whose diagnosis is queued
+             *      or running, so none of their jobs has a line yet.
+             */
+            ci_runs_pending?: number;
+            /**
+             * Format: uint64
+             * @description Failed CI run attempts on the reviewed head whose diagnosis failed or
+             *      was cancelled, so none of their jobs has a line.
+             */
+            ci_runs_unfinished?: number;
             /**
              * Format: date-time
              * @description GitHub's update time for the recorded pull request state that
