@@ -1156,6 +1156,11 @@ export interface components {
              */
             completed_at?: string | null;
             /**
+             * @description Recorded check coverage counts and fixed cancellation causes, without source text.
+             *      Absent coverage does not establish that every check ran.
+             */
+            coverage_details?: string[];
+            /**
              * @description The code-only findings the code assessment recorded, `SERIOUS` first.
              *      An empty list does not establish deployment safety.
              */
@@ -3297,6 +3302,13 @@ export interface components {
             placement: string;
             /** @description Human override beside the original decision, when one was requested. */
             promotion?: components["schemas"]["FindingPromotionView"] | null;
+            /**
+             * Format: uuid
+             * @description The finding that represents this finding's publication group, when an
+             *      applied group publishes it in one comment with other findings. Every
+             *      member names the same finding, the representative included.
+             */
+            publication_group?: string | null;
             /** @description Recognized safe reason codes; unknown values are represented as `UNRECOGNIZED`. */
             reason_codes: string[];
             /** @description Rule that produced the recorded placement. */
