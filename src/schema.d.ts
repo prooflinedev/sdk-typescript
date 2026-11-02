@@ -3461,16 +3461,10 @@ export interface components {
              *      on-demand ceiling.
              */
             budget_credits: number;
-            /**
-             * @description An exact commit. Name it or `ref`.
-             * @default null
-             */
-            commit_sha: string | null;
-            /**
-             * @description A ref, resolved once when the request arrives. Name it or `commit_sha`.
-             * @default null
-             */
-            ref: string | null;
+            /** @description An exact commit. Name it or `ref`. */
+            commit_sha?: string | null;
+            /** @description A ref, resolved once when the request arrives. Name it or `commit_sha`. */
+            ref?: string | null;
             /**
              * Format: uuid
              * @description The caller's identity for this request. Sending it again returns the
