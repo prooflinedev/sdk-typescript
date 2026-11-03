@@ -773,6 +773,15 @@ export interface components {
              */
             route?: components["schemas"]["SummaryRoute"] | null;
         };
+        /** @description One file World cited for a check's result. */
+        CheckFile: {
+            /** @description The repository-relative path. It is repository text. */
+            path: components["schemas"]["UntrustedText"];
+            /** @description The revision World read the file at. */
+            revision: components["schemas"]["CheckFileRevision"];
+        };
+        /** @description The revision a cited file was read at. */
+        CheckFileRevision: "PROPOSED_CODE_REVISION" | "BASE_CODE_REVISION";
         /**
          * @description World's lifecycle disclosure for the evaluator version that answered, as
          *      the receipt recorded it. A deployment gate counts only `GATING` results
@@ -1106,6 +1115,12 @@ export interface components {
              *      this instant, which can precede the assessment.
              */
             evaluated_at?: string | null;
+            /**
+             * @description The files World cited as evidence for this result, once each in
+             *      World's order, with the revision World read each at. Empty when World
+             *      cited no file, and on results recorded before World cited files.
+             */
+            files: components["schemas"]["CheckFile"][];
             /**
              * @description The lifecycle of the evaluator version that answered. It says whether
              *      a deployment gate could count this result, not whether one did.

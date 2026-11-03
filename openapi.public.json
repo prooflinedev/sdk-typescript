@@ -763,6 +763,47 @@
         ],
         "type": "object"
       },
+      "CheckFile": {
+        "description": "One file World cited for a check's result.",
+        "properties": {
+          "path": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/UntrustedText"
+              }
+            ],
+            "description": "The repository-relative path. It is repository text."
+          },
+          "revision": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CheckFileRevision"
+              }
+            ],
+            "description": "The revision World read the file at."
+          }
+        },
+        "required": [
+          "revision",
+          "path"
+        ],
+        "type": "object"
+      },
+      "CheckFileRevision": {
+        "description": "The revision a cited file was read at.",
+        "oneOf": [
+          {
+            "const": "PROPOSED_CODE_REVISION",
+            "description": "The reviewed commit.",
+            "type": "string"
+          },
+          {
+            "const": "BASE_CODE_REVISION",
+            "description": "Its merge base.",
+            "type": "string"
+          }
+        ]
+      },
       "CheckLifecycle": {
         "description": "World's lifecycle disclosure for the evaluator version that answered, as\n the receipt recorded it. A deployment gate counts only `GATING` results\n (`DeterministicCoverage::gate_effective_status`), and only when it\n evaluates a deployment; the lifecycle alone permits or blocks nothing.",
         "oneOf": [
@@ -1405,6 +1446,13 @@
               "null"
             ]
           },
+          "files": {
+            "description": "The files World cited as evidence for this result, once each in\n World's order, with the revision World read each at. Empty when World\n cited no file, and on results recorded before World cited files.",
+            "items": {
+              "$ref": "#/components/schemas/CheckFile"
+            },
+            "type": "array"
+          },
           "lifecycle": {
             "allOf": [
               {
@@ -1436,7 +1484,8 @@
         "required": [
           "name",
           "outcome",
-          "lifecycle"
+          "lifecycle",
+          "files"
         ],
         "type": "object"
       },
