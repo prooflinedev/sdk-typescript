@@ -1171,6 +1171,11 @@ export interface components {
              */
             completed_at?: string | null;
             /**
+             * @description Recorded check coverage counts and fixed cancellation causes, without source text.
+             *      Absent coverage does not establish that every check ran.
+             */
+            coverage_details?: string[];
+            /**
              * @description The code-only findings the code assessment recorded, `SERIOUS` first.
              *      An empty list does not establish deployment safety.
              */
