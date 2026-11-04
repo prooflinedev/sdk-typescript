@@ -42,6 +42,7 @@ export interface AssessmentGaps {
   checks: {
     name: string;
     outcome: string;
+    lifecycle: string;
     detail: string | null;
     unresolvedReason: string | null;
   }[];
@@ -418,6 +419,7 @@ function outcome(
         .map((check) => ({
           name: check.name,
           outcome: check.outcome,
+          lifecycle: check.lifecycle,
           detail: check.detail ?? null,
           unresolvedReason: check.unresolved_reason ?? null,
         })),

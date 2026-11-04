@@ -602,6 +602,49 @@ test("waiting retains assessment gaps, unknown states and unresolved checks with
   );
 });
 
+for (const [outcome, lifecycle] of [
+  ["UNRESOLVED", "SHADOW"],
+  ["READY", "FUTURE_LIFECYCLE"],
+]) {
+  test(`waiting preserves ${lifecycle} lifecycle in check-gap summaries`, async (t) => {
+    const body = review("COMPLETED", [
+      {
+        ...assessment(),
+        checks: {
+          receipt_recorded: true,
+          status: "READY",
+          families: [
+            {
+              name: "Environment reachability",
+              outcome,
+              lifecycle,
+              detail: "evidence gap",
+              unresolved_reason: "NEEDS_EVIDENCE",
+            },
+          ],
+        },
+      },
+    ]);
+    const fixture = await server(t, (_, response) => json(response, 200, body));
+    const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
+
+    const result = await client.waitForReview(orgId, reviewId);
+
+    assert.equal(result.status, "INCOMPLETE");
+    assert.deepEqual(result.review, body);
+    assert.equal(result.gaps.length, 1);
+    assert.deepEqual(result.gaps[0].checks, [
+      {
+        name: "Environment reachability",
+        outcome,
+        lifecycle,
+        detail: "evidence gap",
+        unresolvedReason: "NEEDS_EVIDENCE",
+      },
+    ]);
+  });
+}
+
 test("CODE-only outcomes retain execution gaps while ENV assessments keep precedence", async (t) => {
   let body;
   const logs = [];
