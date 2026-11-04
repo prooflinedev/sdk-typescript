@@ -244,6 +244,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/organizations/{org_id}/repositories/{repo_id}/scans": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Scan a repository revision
+         * @description Scans the whole repository at one commit, resolved once from `ref` or named by `commit_sha`, and records that resolution. Requires live GitHub write access, and `budget_credits` at most the organization's on-demand scan limit; a limit of 0 turns on-demand scans off. Sending the same `request_id` again returns the first resolution. Results remain in Proofline and are never posted to GitHub.
+         */
+        post: operations["request_scan"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/organizations/{org_id}/repository-names": {
         parameters: {
             query?: never;
@@ -3453,6 +3473,44 @@ export interface components {
              */
             run_number: number;
         };
+        /** @description One request to scan a ref or an exact commit of the repository. */
+        ScanRequestBody: {
+            /**
+             * Format: int64
+             * @description The credits the whole scan may spend, at most the organization's
+             *      on-demand ceiling.
+             */
+            budget_credits: number;
+            /** @description An exact commit. Name it or `ref`. */
+            commit_sha?: string | null;
+            /** @description A ref, resolved once when the request arrives. Name it or `commit_sha`. */
+            ref?: string | null;
+            /**
+             * Format: uuid
+             * @description The caller's identity for this request. Sending it again returns the
+             *      first resolution instead of scanning again.
+             */
+            request_id: string;
+        };
+        /** @description What a scan request resolved to. */
+        ScanResponse: {
+            /**
+             * @description `CREATED`, `EXISTING` when this request id was already resolved, or
+             *      `REPOSITORY_UNAVAILABLE` when GitHub could not resolve it.
+             */
+            outcome: string;
+            /**
+             * Format: uuid
+             * @description The request's one resolution receipt.
+             */
+            resolution_id: string;
+            /**
+             * Format: uuid
+             * @description The scan review, readable through the review routes. Absent when
+             *      GitHub could not resolve the request.
+             */
+            review_id?: string | null;
+        };
         SpecialistAssessmentExecution: {
             /**
              * Format: uuid
@@ -4307,6 +4365,61 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RepositoryGuidance"];
+                };
+            };
+            /** @description An RFC 9457 problem; the HTTP status remains authoritative. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    request_scan: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                org_id: string;
+                repo_id: string;
+            };
+            cookie?: never;
+        };
+        /** @description One request to scan a ref or an exact commit of the repository. */
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScanRequestBody"];
+            };
+        };
+        responses: {
+            /** @description What a scan request resolved to. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScanResponse"];
+                };
+            };
+            /**
+             * @description A run-now request that created nothing, as the 400 it is answered with.
+             *
+             *      The refusal is a configuration fact, not a failure, and it is still sent
+             *      as an RFC 9457 problem: `title`, `status` and `detail` are what a client
+             *      that knows only problems shows, and `repository_name` and `refusal` are
+             *      the extension members a client that knows refusals links from. During a
+             *      rollout a page loaded from the previous bundle keeps working against
+             *      this server, because a refusal was a 400 with a `detail` before too.
+             */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunNowRefused"];
                 };
             };
             /** @description An RFC 9457 problem; the HTTP status remains authoritative. */

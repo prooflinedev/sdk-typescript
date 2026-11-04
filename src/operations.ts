@@ -19,6 +19,8 @@ export type RequestPatchReviewBody = NonNullable<paths["/api/v1/organizations/{o
 export type RequestReviewParameters = paths["/api/v1/organizations/{org_id}/repositories/{repo_id}/pull-requests/{number}/review"]["post"]["parameters"];
 export type RequestReviewBody = NonNullable<paths["/api/v1/organizations/{org_id}/repositories/{repo_id}/pull-requests/{number}/review"]["post"]["requestBody"]>["content"]["application/json"];
 export type GetReviewGuidanceParameters = paths["/api/v1/organizations/{org_id}/repositories/{repo_id}/review-guidance"]["get"]["parameters"];
+export type RequestScanParameters = paths["/api/v1/organizations/{org_id}/repositories/{repo_id}/scans"]["post"]["parameters"];
+export type RequestScanBody = NonNullable<paths["/api/v1/organizations/{org_id}/repositories/{repo_id}/scans"]["post"]["requestBody"]>["content"]["application/json"];
 export type ListRepositoriesParameters = paths["/api/v1/organizations/{org_id}/repository-names"]["get"]["parameters"];
 export type ListReviewsParameters = paths["/api/v1/organizations/{org_id}/reviews"]["get"]["parameters"];
 export type GetDeploymentReviewParameters = paths["/api/v1/organizations/{org_id}/reviews/deployments/{public_key}"]["get"]["parameters"];
@@ -75,6 +77,10 @@ export class Operations {
 
   getReviewGuidance(parameters: GetReviewGuidanceParameters): Promise<components["schemas"]["RepositoryGuidance"]> {
     return this.invoke("GET", "/api/v1/organizations/{org_id}/repositories/{repo_id}/review-guidance", parameters);
+  }
+
+  requestScan(parameters: RequestScanParameters, body: RequestScanBody): Promise<components["schemas"]["ScanResponse"]> {
+    return this.invoke("POST", "/api/v1/organizations/{org_id}/repositories/{repo_id}/scans", parameters, body);
   }
 
   listRepositories(parameters: ListRepositoriesParameters): Promise<components["schemas"]["RepositoryNames"]> {
