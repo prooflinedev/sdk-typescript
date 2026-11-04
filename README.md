@@ -68,35 +68,6 @@ process.stdout.write(page.text);
 // Continue with query.cursor = page.nextCursor when it is not null.
 ```
 
-## Pull request review history
-
-`listPullRequestReviews` reads one page of a pull request's review runs.
-`iterPullRequestReviews` follows the cursors to iterate its history in server
-order (newest first). Unlike `iterReviews`, which lists the latest run of each
-pull request, this helper reads the runs of one specific pull request.
-
-```typescript
-for await (const review of client.iterPullRequestReviews(
-  {
-    path: {
-      org_id: organizationId,
-      repository: "owner/repo",
-      pull_request_number: 42,
-    },
-    query: { limit: 50 },
-  },
-  { maxPages: 100, maxItems: 10_000 },
-)) {
-  console.log(review.id, review.status);
-}
-```
-
-The iterator retains query filters and an optional initial cursor, and fetches
-pages only as they are consumed. Breaking the loop stops pagination. As with
-`iterReviews`, the defaults are 100 pages and 10,000 items; exceeding either
-bound throws rather than silently returning a partial history. Malformed page
-metadata and missing or repeated continuation cursors also throw.
-
 ## Development
 
 The repository bundles its public API contract in `openapi.public.json`.
