@@ -21,6 +21,10 @@ The client reads `PROOFLINE_TOKEN` when no token is passed, keeps the token in m
 and redacts it from diagnostic output. The [SDK guide](https://proofline.sh/docs/sdks/)
 and [API reference](https://proofline.sh/docs/api/) cover every operation.
 
+## Contributing
+
+This repository distributes the Proofline TypeScript SDK. The public OpenAPI contract generates `src/operations.ts` and `src/schema.d.ts`. Open an issue for changes to the contract or generated code. Pull requests are welcome for the hand-written transport in `src/transport.ts`, client helpers, and tests in `tests/`.
+
 ## Coverage uploads
 
 Upload the reports produced by CI with a repository-restricted token that holds
