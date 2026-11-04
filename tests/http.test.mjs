@@ -1056,3 +1056,114 @@ test("fix helpers preserve unavailable context and never retry a verification re
   );
   assert.equal(observed.length, 5);
 });
+
+function agentSession(overrides = {}) {
+  return {
+    id: reviewId,
+    finding_id: findingId,
+    review_id: assessmentId,
+    connection_id: repoId,
+    vendor: "CURSOR_CLOUD_AGENTS",
+    target: {
+      repository_id: repoId,
+      repository_full_name: "owner/name",
+      github_repository_id: 42,
+      pull_request_number: 7,
+      head_sha: "a".repeat(40),
+    },
+    attempt: 1,
+    status: "RUNNING",
+    done: false,
+    cause: null,
+    vendor_status: null,
+    vendor_url: "https://vendor.example/session",
+    pull_request_url: null,
+    observed_head_sha: null,
+    untrusted_vendor_summary: null,
+    requested_by_user_id: orgId,
+    created_at: "2026-09-30T12:00:00Z",
+    updated_at: "2026-09-30T12:00:00Z",
+    ...overrides,
+  };
+}
+
+test("waiting for an agent session follows done without treating FINISHED as a fix", async (t) => {
+  let body = agentSession({
+    status: "FINISHED",
+    done: true,
+    untrusted_vendor_summary: "I fixed everything",
+    pull_request_url: "https://github.com/owner/name/pull/99",
+  });
+  const fixture = await server(t, (request, response) => {
+    assert.match(
+      request.url,
+      new RegExp(`/api/v1/organizations/${orgId}/agent-sessions/${reviewId}$`),
+    );
+    json(response, 200, body);
+  });
+  const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
+
+  const finished = await client.waitForAgentSession(orgId, reviewId);
+  assert.equal(finished.status, "FINISHED");
+  assert.equal(finished.reason, null);
+  assert.equal(finished.session.untrusted_vendor_summary, "I fixed everything");
+  assert.equal(
+    finished.session.pull_request_url,
+    "https://github.com/owner/name/pull/99",
+  );
+
+  for (const status of ["FAILED", "REFUSED", "HEAD_MOVED", "UNKNOWN"]) {
+    body = agentSession({
+      status,
+      done: true,
+      cause: status === "FAILED" ? "VENDOR_ERROR" : null,
+      observed_head_sha: status === "HEAD_MOVED" ? "b".repeat(40) : null,
+    });
+    const result = await client.waitForAgentSession(orgId, reviewId);
+    assert.equal(result.status, status);
+    assert.equal(result.reason, null);
+  }
+
+  body = agentSession({ status: "RUNNING", done: true });
+  const endedActive = await client.waitForAgentSession(orgId, reviewId);
+  assert.equal(endedActive.status, "UNKNOWN");
+  assert.equal(
+    endedActive.reason,
+    "the session ended without a terminal status",
+  );
+
+  body = agentSession({ status: "FUTURE_VENDOR_STATE", done: true });
+  const unrecognized = await client.waitForAgentSession(orgId, reviewId);
+  assert.equal(unrecognized.status, "UNKNOWN");
+  assert.equal(
+    unrecognized.reason,
+    "the session ended with an unrecognized status",
+  );
+
+  // Status alone is not terminal: keep polling until done or the deadline.
+  body = agentSession({ status: "FINISHED", done: false });
+  const notFollowed = await client.waitForAgentSession(orgId, reviewId, {
+    timeoutMs: 80,
+  });
+  assert.equal(notFollowed.status, "TIMED_OUT");
+  assert.equal(notFollowed.session.status, "FINISHED");
+  assert.equal(notFollowed.session.done, false);
+  assert.equal(
+    notFollowed.reason,
+    "the agent session did not finish before timeoutMs",
+  );
+
+  const timedOut = await client.waitForAgentSession(orgId, reviewId, {
+    timeoutMs: 0,
+  });
+  assert.equal(timedOut.status, "TIMED_OUT");
+  assert.equal(timedOut.session, null);
+
+  body = { id: reviewId, status: "FINISHED", done: true };
+  await assert.rejects(
+    client.waitForAgentSession(orgId, reviewId),
+    (error) =>
+      error instanceof ProoflineError &&
+      error.type === "urn:proofline:sdk:invalid-response",
+  );
+});

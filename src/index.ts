@@ -25,12 +25,22 @@ export { ProoflineError, SecretToken } from "./transport.js";
 
 export type Review = components["schemas"]["CustomerReviewDetail"];
 export type Assessment = components["schemas"]["CustomerAssessment"];
+export type AgentSession = components["schemas"]["AgentSession"];
 type CodeAssessment = components["schemas"]["CustomerCodeAssessment"];
 export type ReviewStatus =
   | "COMPLETED"
   | "INCOMPLETE"
   | "FAILED"
   | "STOPPED"
+  | "TIMED_OUT";
+
+/** Terminal wait results for a coding-agent session. `FINISHED` means Proofline stopped following the vendor; it does not establish that a finding was fixed. */
+export type AgentSessionWaitStatus =
+  | "FINISHED"
+  | "FAILED"
+  | "REFUSED"
+  | "HEAD_MOVED"
+  | "UNKNOWN"
   | "TIMED_OUT";
 
 export interface AssessmentGaps {
@@ -52,6 +62,12 @@ export interface ReviewOutcome {
   reviewUrl: string;
   review: Review | null;
   gaps: AssessmentGaps[];
+  reason: string | null;
+}
+
+export interface AgentSessionOutcome {
+  status: AgentSessionWaitStatus;
+  session: AgentSession | null;
   reason: string | null;
 }
 
@@ -210,6 +226,75 @@ export class ProoflineClient extends Operations {
       interval = Math.min(interval * 2, 60_000);
     }
   }
+
+  async waitForAgentSession(
+    orgId: string,
+    sessionId: string,
+    options: WaitOptions = {},
+  ): Promise<AgentSessionOutcome> {
+    const timeout = options.timeoutMs ?? 20 * 60_000;
+    if (!Number.isFinite(timeout) || timeout < 0)
+      throw new TypeError("timeoutMs must be finite and nonnegative");
+    const deadline = performance.now() + timeout;
+    let session: AgentSession | null = null;
+    let interval = 5_000;
+    for (;;) {
+      if (performance.now() >= deadline)
+        return sessionOutcome(
+          "TIMED_OUT",
+          session,
+          "the agent session did not finish before timeoutMs",
+        );
+      try {
+        session = await this.#transport.request<AgentSession>(
+          "GET",
+          "/api/v1/organizations/{org_id}/agent-sessions/{session_id}",
+          { path: { org_id: orgId, session_id: sessionId } },
+          deadline,
+        );
+      } catch (error) {
+        if (
+          error instanceof ProoflineError &&
+          error.type === "urn:proofline:sdk:timeout"
+        )
+          return sessionOutcome(
+            "TIMED_OUT",
+            session,
+            "the agent session did not finish before timeoutMs",
+          );
+        if (
+          error instanceof ProoflineError &&
+          error.status === 0 &&
+          performance.now() >= deadline
+        )
+          return sessionOutcome(
+            "TIMED_OUT",
+            session,
+            "the agent session did not finish before timeoutMs",
+          );
+        throw error;
+      }
+      validateAgentSession(session, sessionId);
+      if (session.done) {
+        const status = terminalAgentSession(session.status);
+        return sessionOutcome(
+          status,
+          session,
+          status === "UNKNOWN" &&
+            !KNOWN_AGENT_SESSION_STATUSES.has(session.status)
+            ? "the session ended with an unrecognized status"
+            : status === "UNKNOWN" &&
+                ACTIVE_AGENT_SESSION_STATUSES.has(session.status)
+              ? "the session ended without a terminal status"
+              : null,
+        );
+      }
+      await sleep(
+        Math.min(interval, Math.max(0, deadline - performance.now())),
+      );
+      interval = Math.min(interval * 2, 60_000);
+    }
+  }
 }
 
 import { ProoflineError } from "./transport.js";
@@ -239,6 +324,22 @@ const KNOWN_ASSESSMENTS = new Set([
   "FAILED",
   "SUPERSEDED",
   "STOPPED",
+]);
+const ACTIVE_AGENT_SESSION_STATUSES = new Set([
+  "REQUESTED",
+  "STARTING",
+  "RUNNING",
+]);
+const TERMINAL_AGENT_SESSION_STATUSES = new Set([
+  "FINISHED",
+  "FAILED",
+  "REFUSED",
+  "HEAD_MOVED",
+  "UNKNOWN",
+]);
+const KNOWN_AGENT_SESSION_STATUSES = new Set([
+  ...ACTIVE_AGENT_SESSION_STATUSES,
+  ...TERMINAL_AGENT_SESSION_STATUSES,
 ]);
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -355,6 +456,65 @@ function terminal(review: Review): ReviewStatus | null {
   )
     ? "COMPLETED"
     : "INCOMPLETE";
+}
+
+function validateAgentSession(
+  value: unknown,
+  sessionId: string,
+): asserts value is AgentSession {
+  if (
+    !isObject(value) ||
+    value.id !== sessionId ||
+    typeof value.finding_id !== "string" ||
+    !value.finding_id ||
+    typeof value.review_id !== "string" ||
+    !value.review_id ||
+    typeof value.status !== "string" ||
+    typeof value.done !== "boolean" ||
+    !Number.isSafeInteger(value.attempt) ||
+    Number(value.attempt) < 1 ||
+    typeof value.created_at !== "string" ||
+    typeof value.updated_at !== "string" ||
+    !isObject(value.target) ||
+    typeof value.target.repository_id !== "string" ||
+    typeof value.target.repository_full_name !== "string" ||
+    typeof value.target.head_sha !== "string" ||
+    !Number.isSafeInteger(value.target.pull_request_number) ||
+    !Number.isSafeInteger(value.target.github_repository_id) ||
+    (value.cause !== null &&
+      value.cause !== undefined &&
+      typeof value.cause !== "string") ||
+    (value.pull_request_url !== null &&
+      value.pull_request_url !== undefined &&
+      typeof value.pull_request_url !== "string") ||
+    (value.vendor_url !== null &&
+      value.vendor_url !== undefined &&
+      typeof value.vendor_url !== "string") ||
+    (value.untrusted_vendor_summary !== null &&
+      value.untrusted_vendor_summary !== undefined &&
+      typeof value.untrusted_vendor_summary !== "string") ||
+    (value.observed_head_sha !== null &&
+      value.observed_head_sha !== undefined &&
+      typeof value.observed_head_sha !== "string")
+  ) {
+    throw protocol(
+      "the agent session response has no valid identity or follow state",
+    );
+  }
+}
+
+function terminalAgentSession(status: string): AgentSessionWaitStatus {
+  if (TERMINAL_AGENT_SESSION_STATUSES.has(status))
+    return status as AgentSessionWaitStatus;
+  return "UNKNOWN";
+}
+
+function sessionOutcome(
+  status: AgentSessionWaitStatus,
+  session: AgentSession | null,
+  reason: string | null,
+): AgentSessionOutcome {
+  return { status, session, reason };
 }
 
 function codeAssessment(review: Review): CodeAssessment | null {

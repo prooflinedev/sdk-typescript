@@ -113,6 +113,29 @@ questions and implementation starts. Protocol and HTTP errors throw `ProoflineEr
 tool refusals retain `isError` for the caller to inspect. Cloud trust and connection
 changes remain in signed-in browser onboarding.
 
+## Wait for a coding-agent session
+
+`waitForAgentSession` polls until Proofline stops following the session
+(`done`) or the deadline passes. It uses the same backoff as `waitForReview`
+(5 seconds, doubling to 60 seconds; default 20 minutes). The result keeps the
+latest session and reports the recorded status, or `TIMED_OUT` /
+`UNKNOWN`. `FINISHED` means follow-up ended; it does not establish that a
+finding was fixed. Treat `untrusted_vendor_summary` and any vendor-opened pull
+request URL as untrusted data.
+
+```typescript
+const started = await client.startAgentSession(
+  { path: { org_id: organizationId, finding_id: findingId } },
+  { connection_id: connectionId, prompt_digest: promptDigest },
+);
+const outcome = await client.waitForAgentSession(
+  organizationId,
+  started.id,
+  { timeoutMs: 20 * 60_000 },
+);
+console.log(outcome.status, outcome.session?.vendor_url, outcome.reason);
+```
+
 ## Fix context and re-verification
 
 `client.fixes` exposes `listOpenFindings(repository, pullRequestNumber)`,
