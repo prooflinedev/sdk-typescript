@@ -138,6 +138,43 @@ export class ProoflineClient extends Operations {
     throw protocol("the review collection exceeds maxPages");
   }
 
+  /**
+   * Reads one export page by page through `exportReviews`, following each
+   * opaque cursor with the dataset, window, format and grouping captured on
+   * the first `next()`. A repeating or empty cursor, or more than `maxPages`
+   * pages (default 100), throws an invalid-response `ProoflineError`.
+   * Pages already yielded stay valid; an error can follow them, so treat
+   * written output as partial until iteration finishes.
+   */
+  async *iterExportPages(
+    parameters: ExportParameters,
+    options: { maxPages?: number } = {},
+  ): AsyncGenerator<ExportPage> {
+    const maxPages = integerLimit(options.maxPages ?? 100, "maxPages");
+    const path = { ...parameters.path };
+    const query = { ...parameters.query };
+    const seen = new Set<string>();
+    let cursor = query.cursor;
+    for (let index = 0; index < maxPages; index += 1) {
+      const page = await this.exportReviews({
+        path,
+        query: { ...query, ...(cursor === undefined ? {} : { cursor }) },
+      });
+      yield page;
+      if (page.nextCursor === null) return;
+      // The last page omits the header; an empty one is malformed.
+      if (
+        page.nextCursor === "" ||
+        page.nextCursor === cursor ||
+        seen.has(page.nextCursor)
+      )
+        throw protocol("the export has no advancing cursor");
+      seen.add(page.nextCursor);
+      cursor = page.nextCursor;
+    }
+    throw protocol("the export exceeds maxPages");
+  }
+
   async waitForReview(
     orgId: string,
     reviewId: string,

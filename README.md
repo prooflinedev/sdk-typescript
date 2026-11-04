@@ -68,6 +68,25 @@ process.stdout.write(page.text);
 // Continue with query.cursor = page.nextCursor when it is not null.
 ```
 
+`iterExportPages` follows the cursor for you. It copies the parameters when the
+first page is requested, changes only the cursor afterwards, and yields each page
+in order. NDJSON pages can be concatenated; CSV pages each repeat their header.
+
+```typescript
+for await (const page of client.iterExportPages({
+  path: { org_id: process.env.PROOFLINE_ORGANIZATION_ID!, dataset: "reviews" },
+  query: { from: "2026-10-01T00:00:00Z", to: "2026-10-25T00:00:00Z" },
+})) {
+  process.stdout.write(page.text);
+}
+```
+
+`maxPages` defaults to 100 and must be a positive integer, or the first page
+throws `TypeError` before any request. More than `maxPages` pages, an empty
+cursor or a repeated cursor throws `ProoflineError` with type
+`urn:proofline:sdk:invalid-response`. Pages already yielded stay valid, so treat
+written output as partial until the loop finishes.
+
 ## Development
 
 The repository bundles its public API contract in `openapi.public.json`.
