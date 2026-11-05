@@ -47,8 +47,9 @@ export class ProoflineError extends Error {
     readonly status: number,
     type: string,
     detail: string,
+    options?: { cause?: unknown },
   ) {
-    super(`Proofline request failed with status ${status}`);
+    super(`Proofline request failed with status ${status}`, options);
     this.name = "ProoflineError";
     this.#problemType = type;
     this.#detail = detail;
@@ -80,6 +81,12 @@ export interface ClientOptions {
 export interface Parameters {
   path?: object;
   query?: object;
+}
+
+/** Bounds of a long wait: an absolute deadline and a caller's abort signal. */
+export interface Wait {
+  deadline?: number | undefined;
+  signal?: AbortSignal | undefined;
 }
 
 export type Invoke = <T>(
@@ -130,10 +137,20 @@ function positive(value: number, name: string): number {
   return value;
 }
 
+/** The caller aborted; the reason travels as the error cause, never as text. */
+export function aborted(signal: AbortSignal, detail: string): ProoflineError {
+  const error = new ProoflineError(0, "urn:proofline:sdk:aborted", detail, {
+    cause: signal.reason,
+  });
+  error.message = "Proofline wait aborted by the caller";
+  return error;
+}
+
 async function decoded(
   response: Response,
   deadline: number,
   signal: AbortSignal,
+  abort: AbortSignal | undefined,
   waitTimeout: boolean,
   decode: (text: string, headers: Headers) => unknown,
 ): Promise<unknown> {
@@ -173,6 +190,10 @@ async function decoded(
       ? decode(text, response.headers)
       : (JSON.parse(text) as unknown);
   } catch (error) {
+    // The abort comes first: undici fails the stream with the reason itself,
+    // which may be a ProoflineError from another wait on the same controller.
+    if (abort?.aborted)
+      throw aborted(abort, "the response body was abandoned on abort");
     if (error instanceof ProoflineError) throw error;
     if (response.ok && (signal.aborted || performance.now() >= deadline))
       throw new ProoflineError(
@@ -256,8 +277,27 @@ function httpDate(value: string): number {
     : Number.NaN;
 }
 
-export function sleep(milliseconds: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+/** Resolves after the delay, or rejects as soon as the signal aborts. */
+export function sleep(
+  milliseconds: number,
+  signal: AbortSignal | undefined,
+  detail: string,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(aborted(signal, detail));
+      return;
+    }
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, milliseconds);
+    function onAbort(): void {
+      clearTimeout(timer);
+      reject(aborted(signal as AbortSignal, detail));
+    }
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
 }
 
 export class Transport {
@@ -287,7 +327,7 @@ export class Transport {
     method: string,
     template: string,
     parameters: Parameters,
-    deadline?: number,
+    wait?: Wait,
     body?: object,
     decode: (text: string, headers: Headers) => unknown = (text) =>
       JSON.parse(text),
@@ -309,7 +349,11 @@ export class Transport {
     const requestBody = body === undefined ? undefined : JSON.stringify(body);
     if (mcpPhase && new TextEncoder().encode(requestBody).length > 8192)
       throw new TypeError("MCP request exceeds 8192 bytes");
+    const deadline = wait?.deadline;
+    const abort = wait?.signal;
     for (let attempt = 0; ; attempt += 1) {
+      if (abort?.aborted)
+        throw aborted(abort, "the request was aborted before it was sent");
       const headers = new Headers({
         Accept: accept,
         "User-Agent": `proofline-typescript/${VERSION}`,
@@ -335,7 +379,8 @@ export class Transport {
           "the request deadline expired",
         );
       const requestDeadline = now + remaining;
-      const signal = AbortSignal.timeout(Math.ceil(remaining));
+      const expiry = AbortSignal.timeout(Math.ceil(remaining));
+      const signal = abort ? AbortSignal.any([expiry, abort]) : expiry;
       let response: Response;
       try {
         response = await fetch(url, {
@@ -347,7 +392,9 @@ export class Transport {
           signal,
         });
       } catch {
-        if (signal.aborted && waitTimeout)
+        if (abort?.aborted)
+          throw aborted(abort, "the request was aborted in flight");
+        if (expiry.aborted && waitTimeout)
           throw new ProoflineError(
             0,
             "urn:proofline:sdk:timeout",
@@ -381,6 +428,7 @@ export class Transport {
         response,
         requestDeadline,
         signal,
+        abort,
         waitTimeout,
         decode,
       );
@@ -401,7 +449,7 @@ export class Transport {
           "the review timeout expires before the server permits a retry",
         );
       }
-      await sleep(delay);
+      await sleep(delay, abort, "the retry pause was aborted");
     }
   }
 }

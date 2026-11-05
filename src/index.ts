@@ -16,7 +16,7 @@ export type { ExportPage, ExportParameters } from "./exports.js";
 
 import { type ListReviewsParameters, Operations } from "./operations.js";
 import type { components } from "./schema.js";
-import { type ClientOptions, sleep, Transport } from "./transport.js";
+import { aborted, type ClientOptions, sleep, Transport } from "./transport.js";
 
 export type * from "./operations.js";
 export type { components, operations, paths } from "./schema.js";
@@ -56,7 +56,8 @@ export interface ReviewOutcome {
 }
 
 export interface WaitOptions {
-  timeoutMs?: number;
+  timeoutMs?: number | undefined;
+  signal?: AbortSignal | undefined;
 }
 
 export class ProoflineClient extends Operations {
@@ -146,11 +147,15 @@ export class ProoflineClient extends Operations {
     const timeout = options.timeoutMs ?? 20 * 60_000;
     if (!Number.isFinite(timeout) || timeout < 0)
       throw new TypeError("timeoutMs must be finite and nonnegative");
+    const signal = options.signal;
+    if (signal !== undefined && !(signal instanceof AbortSignal))
+      throw new TypeError("signal must be an AbortSignal");
     const deadline = performance.now() + timeout;
     const url = this.#transport.reviewUrl(orgId, reviewId);
     let review: Review | null = null;
     let interval = 5_000;
     for (;;) {
+      if (signal?.aborted) throw aborted(signal, "the review wait was aborted");
       if (performance.now() >= deadline)
         return outcome(
           "TIMED_OUT",
@@ -163,9 +168,17 @@ export class ProoflineClient extends Operations {
           "GET",
           "/api/v1/organizations/{org_id}/reviews/{review_id}",
           { path: { org_id: orgId, review_id: reviewId } },
-          deadline,
+          { deadline, signal },
         );
       } catch (error) {
+        // An abort wins at every phase, including a request that ends past the deadline.
+        if (
+          error instanceof ProoflineError &&
+          error.type === "urn:proofline:sdk:aborted"
+        )
+          throw error;
+        if (signal?.aborted)
+          throw aborted(signal, "the review wait was aborted");
         if (
           error instanceof ProoflineError &&
           error.type === "urn:proofline:sdk:timeout"
@@ -206,6 +219,8 @@ export class ProoflineClient extends Operations {
         );
       await sleep(
         Math.min(interval, Math.max(0, deadline - performance.now())),
+        signal,
+        "the pause before the next read was aborted",
       );
       interval = Math.min(interval * 2, 60_000);
     }
