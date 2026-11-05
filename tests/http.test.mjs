@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { once } from "node:events";
+import { getEventListeners, once } from "node:events";
 import {
   cp,
   mkdtemp,
@@ -1505,6 +1505,150 @@ test("the wait timeout includes an in-flight request and returns the retained re
   } finally {
     clock.mock.restore();
   }
+});
+
+const abortReason = new Error("a newer commit arrived");
+const rejectsWithAbortReason = (error) => error === abortReason;
+
+// Aborts once the server has answered, so the wait is in a known phase.
+async function abortAfterResponse(t, respond) {
+  const controller = new AbortController();
+  const fixture = await server(t, (_, response) => {
+    respond(response);
+    setTimeout(() => controller.abort(abortReason), 50);
+  });
+  const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
+  return { client, fixture, signal: controller.signal };
+}
+
+test("an already-aborted wait rejects before any request, even with no time left", async (t) => {
+  const fixture = await server(t, (_, response) =>
+    json(response, 200, review()),
+  );
+  const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
+  for (const timeoutMs of [undefined, 0])
+    await assert.rejects(
+      client.waitForReview(orgId, reviewId, {
+        timeoutMs,
+        signal: AbortSignal.abort(abortReason),
+      }),
+      rejectsWithAbortReason,
+    );
+  assert.equal(fixture.calls.length, 0);
+});
+
+test("aborting while polling between requests rejects with the caller's reason", async (t) => {
+  const { client, fixture, signal } = await abortAfterResponse(t, (response) =>
+    json(response, 200, review("RUNNING")),
+  );
+  const started = performance.now();
+  await assert.rejects(
+    client.waitForReview(orgId, reviewId, { signal }),
+    rejectsWithAbortReason,
+  );
+  assert(performance.now() - started < 1000);
+  assert.equal(fixture.calls.length, 1);
+});
+
+test("aborting a poll request that has no response yet rejects with the caller's reason", async (t) => {
+  const controller = new AbortController();
+  const fixture = await server(t, () =>
+    setTimeout(() => controller.abort(abortReason), 50),
+  );
+  const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
+  const started = performance.now();
+  await assert.rejects(
+    client.waitForReview(orgId, reviewId, { signal: controller.signal }),
+    rejectsWithAbortReason,
+  );
+  assert(performance.now() - started < 1000);
+});
+
+test("aborting during a retry wait rejects with the caller's reason", async (t) => {
+  const { client, fixture, signal } = await abortAfterResponse(t, (response) =>
+    json(response, 429, {}, { "Retry-After": "2" }),
+  );
+  const started = performance.now();
+  await assert.rejects(
+    client.waitForReview(orgId, reviewId, { signal }),
+    rejectsWithAbortReason,
+  );
+  assert(performance.now() - started < 1000);
+  assert.equal(fixture.calls.length, 1);
+});
+
+test("aborting while the response body streams rejects with the caller's reason", async (t) => {
+  const { client, signal } = await abortAfterResponse(t, (response) => {
+    response.writeHead(200, { "Content-Type": "application/json" });
+    response.write('{"id":');
+  });
+  const started = performance.now();
+  await assert.rejects(
+    client.waitForReview(orgId, reviewId, { signal }),
+    rejectsWithAbortReason,
+  );
+  assert(performance.now() - started < 1000);
+});
+
+test("an abort that lands before the deadline wins over the timeout", async (t) => {
+  const controller = new AbortController();
+  const fixture = await server(t, () =>
+    setTimeout(() => controller.abort(abortReason), 20),
+  );
+  const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
+  await assert.rejects(
+    client.waitForReview(orgId, reviewId, {
+      timeoutMs: 200,
+      signal: controller.signal,
+    }),
+    rejectsWithAbortReason,
+  );
+});
+
+test("a deadline that passes before the abort returns TIMED_OUT and ignores the later abort", async (t) => {
+  const fixture = await server(t, () => {});
+  const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
+  const controller = new AbortController();
+  const result = await client.waitForReview(orgId, reviewId, {
+    timeoutMs: 30,
+    signal: controller.signal,
+  });
+  controller.abort(abortReason);
+  assert.equal(result.status, "TIMED_OUT");
+  assert.equal(getEventListeners(controller.signal, "abort").length, 0);
+});
+
+test("an abort and an expired deadline observed together reject with the abort", async (t) => {
+  const fixture = await server(t, () => {});
+  const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
+  const controller = new AbortController();
+  const waiting = client.waitForReview(orgId, reviewId, {
+    timeoutMs: 30,
+    signal: controller.signal,
+  });
+  // Block the event loop past the deadline so both are pending when the wait resumes.
+  const blockedUntil = performance.now() + 100;
+  while (performance.now() < blockedUntil);
+  controller.abort(abortReason);
+  await assert.rejects(waiting, rejectsWithAbortReason);
+});
+
+test("a signal that never aborts leaves no listeners behind", async (t) => {
+  let mode = "running";
+  const fixture = await server(t, (_, response) =>
+    json(response, 200, mode === "running" ? review("RUNNING") : review()),
+  );
+  const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
+  const unused = new AbortController();
+  const timedOut = await client.waitForReview(orgId, reviewId, {
+    timeoutMs: 80,
+    signal: unused.signal,
+  });
+  assert.equal(timedOut.status, "TIMED_OUT");
+  mode = "completed";
+  for (let index = 0; index < 3; index += 1)
+    await client.waitForReview(orgId, reviewId, { signal: unused.signal });
+  assert.equal(getEventListeners(unused.signal, "abort").length, 0);
 });
 
 test("pagination keeps filters and refuses cycles, incomplete metadata and resource bounds", async (t) => {
