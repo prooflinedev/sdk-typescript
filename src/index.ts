@@ -1,3 +1,12 @@
+import { refuseExposedPatch } from "./credentials.js";
+
+export {
+  type CredentialExposure,
+  CredentialExposureError,
+  type CredentialKind,
+  scanPatchForCredentials,
+} from "./credentials.js";
+
 import { FixesClient } from "./fixes.js";
 
 export type { ReverificationRequest } from "./fixes.js";
@@ -66,9 +75,19 @@ export class ProoflineClient extends Operations {
 
   constructor(options: ClientOptions) {
     const transport = new Transport(options);
-    super((method, path, parameters, body) =>
-      transport.request(method, path, parameters, undefined, body),
-    );
+    const patchGuard = options.patchGuard ?? "off";
+    if (patchGuard !== "refuse" && patchGuard !== "off")
+      throw new TypeError('patchGuard must be "refuse" or "off"');
+    // A refusal rejects like any other failure; it never throws synchronously.
+    super(async (method, path, parameters, body) => {
+      if (
+        patchGuard === "refuse" &&
+        method === "POST" &&
+        path === PATCH_REVIEWS
+      )
+        refuseExposedPatch(body);
+      return transport.request(method, path, parameters, undefined, body);
+    });
     this.#transport = transport;
     this.knowledge = new KnowledgeClient(transport);
     this.fixes = new FixesClient(transport);
@@ -213,6 +232,9 @@ export class ProoflineClient extends Operations {
 }
 
 import { ProoflineError } from "./transport.js";
+
+const PATCH_REVIEWS =
+  "/api/v1/organizations/{org_id}/repositories/{repo_id}/patch-reviews";
 
 function protocol(detail: string): ProoflineError {
   return new ProoflineError(0, "urn:proofline:sdk:invalid-response", detail);

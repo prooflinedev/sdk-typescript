@@ -75,6 +75,8 @@ export interface ClientOptions {
   baseUrl: string;
   token?: string | SecretToken;
   requestTimeoutMs?: number;
+  /** Refuse patch reviews whose added lines carry credentials. Defaults to "off". */
+  patchGuard?: "refuse" | "off" | undefined;
 }
 
 export interface Parameters {
