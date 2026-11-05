@@ -946,6 +946,139 @@ test("exports preserve CSV cells, opaque cursors and tenant authorization failur
   );
 });
 
+test("export iteration keeps one query, follows opaque cursors and refuses cycles and resource bounds", async (t) => {
+  const chains = {
+    normal: { first: "opaque/+2", "opaque/+2": "opaque/+3" },
+    cycle: { first: "a", a: "b", b: "a" },
+    empty: { first: "" },
+    refuse: { first: "refused" },
+  };
+  let mode = "normal";
+  const { baseUrl, calls } = await server(t, (request, response) => {
+    const cursor = new URL(request.url, "http://127.0.0.1").searchParams.get(
+      "cursor",
+    );
+    if (cursor === "refused")
+      return json(response, 404, { detail: "not found" });
+    const label = cursor ?? "first";
+    const next = chains[mode][label] ?? null;
+    const csv = request.url.includes("format=csv");
+    response.writeHead(200, {
+      "content-type": csv ? "text/csv" : "application/x-ndjson",
+      "x-proofline-export-version": "1",
+      "x-proofline-export-settled-until": "2026-10-25T00:00:00Z",
+      ...(next === null ? {} : { "x-proofline-export-next-cursor": next }),
+    });
+    response.end(
+      csv
+        ? `dataset_version,page\r\n1,${label}\r\n`
+        : `${JSON.stringify({ dataset_version: 1, page: label })}\n`,
+    );
+  });
+  const client = new ProoflineClient({ baseUrl, token });
+  const parameters = {
+    path: { org_id: orgId, dataset: "findings" },
+    query: {
+      from: "2026-10-01T00:00:00Z",
+      to: "2026-10-25T00:00:00Z",
+      format: "csv",
+    },
+  };
+  const snapshot = structuredClone(parameters);
+  const withoutCursor = ({ url }) => {
+    const sent = new URL(url, baseUrl);
+    sent.searchParams.delete("cursor");
+    return `${sent.pathname}?${sent.searchParams}`;
+  };
+  const expected = `/api/v1/organizations/${orgId}/exports/findings?${new URLSearchParams(parameters.query)}`;
+  const cursorOf = ({ url }) =>
+    new URL(url, baseUrl).searchParams.get("cursor");
+  const rowsOf = (pages) =>
+    pages.flatMap((page) => page.rows.map((row) => row.page));
+  const invalidResponse = (error) =>
+    error instanceof ProoflineError &&
+    error.type === "urn:proofline:sdk:invalid-response";
+
+  const pages = await Array.fromAsync(client.iterExportPages(parameters));
+  assert.deepEqual(rowsOf(pages), ["first", "opaque/+2", "opaque/+3"]);
+  assert.deepEqual(
+    pages.map((page) => page.nextCursor),
+    ["opaque/+2", "opaque/+3", null],
+  );
+  assert.deepEqual(calls.map(cursorOf), [null, "opaque/+2", "opaque/+3"]);
+  assert.match(calls[1].url, /cursor=opaque%2F%2B2/);
+  assert.deepEqual(calls.map(withoutCursor), [expected, expected, expected]);
+  assert.deepEqual(parameters, snapshot);
+
+  let start = calls.length;
+  const query = { ...parameters.query };
+  const iterator = client.iterExportPages({ path: parameters.path, query });
+  await iterator.next();
+  assert.deepEqual(query, parameters.query);
+  Object.assign(query, {
+    from: "2026-10-02T00:00:00Z",
+    format: "ndjson",
+    cursor: "opaque/+3",
+  });
+  const changed = structuredClone(query);
+  assert.deepEqual(rowsOf(await Array.fromAsync(iterator)), [
+    "opaque/+2",
+    "opaque/+3",
+  ]);
+  assert.deepEqual(query, changed);
+  assert.deepEqual(calls.slice(start).map(withoutCursor), [
+    expected,
+    expected,
+    expected,
+  ]);
+
+  start = calls.length;
+  const resumed = await Array.fromAsync(
+    client.iterExportPages({
+      ...parameters,
+      query: { ...parameters.query, cursor: "opaque/+2" },
+    }),
+  );
+  assert.deepEqual(rowsOf(resumed), ["opaque/+2", "opaque/+3"]);
+  assert.deepEqual(calls.slice(start).map(cursorOf), [
+    "opaque/+2",
+    "opaque/+3",
+  ]);
+
+  for (const refusal of ["cycle", "empty"]) {
+    mode = refusal;
+    await assert.rejects(
+      Array.fromAsync(client.iterExportPages(parameters)),
+      invalidResponse,
+      `${refusal} cursor`,
+    );
+  }
+  mode = "normal";
+  start = calls.length;
+  await assert.rejects(
+    Array.fromAsync(client.iterExportPages(parameters, { maxPages: 2 })),
+    invalidResponse,
+  );
+  assert.equal(calls.length - start, 2);
+  start = calls.length;
+  await assert.rejects(
+    Array.fromAsync(client.iterExportPages(parameters, { maxPages: 0 })),
+    (error) =>
+      error instanceof TypeError &&
+      error.message === "maxPages must be a positive integer",
+  );
+  assert.equal(calls.length, start);
+
+  mode = "refuse";
+  await assert.rejects(
+    Array.fromAsync(client.iterExportPages(parameters)),
+    (error) =>
+      error instanceof ProoflineError &&
+      error.status === 404 &&
+      error.detail === "not found",
+  );
+});
+
 test("knowledge negotiates MCP and preserves scoped refusals without retry", async (t) => {
   let refusal = false;
   let wrongId = false;
