@@ -72,6 +72,55 @@ process.stdout.write(page.text);
 // Continue with query.cursor = page.nextCursor when it is not null.
 ```
 
+## Patch credential guard
+
+`requestPatchReview` is the one operation that sends local, unpushed changes off the
+machine, and git hooks and coding agents call it without a person reading the diff
+first. With `patchGuard: "refuse"`, the client scans the lines the patch adds before
+the request leaves the process, for credential-like values: AWS access key IDs,
+GitHub tokens, Slack tokens, Stripe live keys, Google API keys and PEM private key
+headers. Removed lines and context never count, so a patch that deletes a secret
+goes through. A match refuses the request with a `CredentialExposureError` of type
+`urn:proofline:sdk:credential-exposure`. Its `exposures` list every `file`, `line`
+and `kind`, its message names the first ten, and neither retains a value.
+
+```typescript
+import { CredentialExposureError, ProoflineClient } from "@proofline/sdk";
+
+const client = new ProoflineClient({
+  baseUrl: "https://proofline.sh",
+  patchGuard: "refuse",
+});
+try {
+  await client.requestPatchReview(
+    { path: { org_id: organizationId, repo_id: repositoryId } },
+    { base_commit_sha: baseCommitSha, patch },
+  );
+} catch (error) {
+  if (error instanceof CredentialExposureError) {
+    for (const { file, line, kind } of error.exposures)
+      console.error(`${JSON.stringify(file)}:${line} adds a ${kind}; rotate it`);
+  }
+  throw error;
+}
+```
+
+The list is deliberately short and prefix-based, with no entropy heuristics, so every
+refusal can be explained. Documentation placeholders such as AWS's sample keys ending
+in `EXAMPLE`, `xoxb-your-bot-token` and a token body made of one repeated character
+do not match, and a PEM header counts only when key material follows it. The client
+list is maintained here and is independent of the credential shapes the server masks
+in recorded finding text. Hunk line counts attribute each line; an added line the
+counts cannot place is scanned as well and reported with line 0, and a header line
+that carries a token is reported without a location, so a patch with a wrong count
+fails closed. File names in `exposures` are raw, so escape them before
+printing, as the example does. The refusal has
+status 0 like other client-side errors and is never worth retrying; check
+`instanceof CredentialExposureError` or the `type`. `scanPatchForCredentials(patch)`
+runs the same scan on its own, for a pre-commit hook. The guard is off unless a
+client asks for it, so existing hooks and agents keep their behavior across a patch
+release.
+
 ## Development
 
 The repository bundles its public API contract in `openapi.public.json`.

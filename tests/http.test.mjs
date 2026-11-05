@@ -3,7 +3,13 @@ import { once } from "node:events";
 import { createServer } from "node:http";
 import test from "node:test";
 import { inspect } from "node:util";
-import { ProoflineClient, ProoflineError, SecretToken } from "../dist/index.js";
+import {
+  CredentialExposureError,
+  ProoflineClient,
+  ProoflineError,
+  SecretToken,
+  scanPatchForCredentials,
+} from "../dist/index.js";
 
 const orgId = "00000000-0000-7000-8000-000000000001";
 const reviewId = "00000000-0000-7000-8000-000000000002";
@@ -806,6 +812,374 @@ test("the wait timeout includes an in-flight request and returns the retained re
   } finally {
     clock.mock.restore();
   }
+});
+
+// Built at runtime so this file's own diff carries no credential shape.
+const awsCanary = ["AKIA", "IOSFODNN7CANARY1"].join("");
+const githubCanary = `ghp_${"Canary3331".repeat(4).slice(0, 36)}`;
+const googleCanary = `AIza${"Canary3331".repeat(4).slice(0, 34)}-`;
+const stripeCanary = `sk_live_${"Canary3331".repeat(3).slice(0, 24)}`;
+const slackCanary = ["xoxb", "1234567890", "1234567890", "canarytoken"].join(
+  "-",
+);
+const pemHeader = (kind) => ["-----BEGIN", kind, "KEY-----"].join(" ");
+
+function gitPatch(...sections) {
+  return `${sections.flat().join("\n")}\n`;
+}
+
+test("the patch scan reports only added credentials with the right file and line", async (t) => {
+  const settings = [
+    "diff --git a/config/settings.py b/config/settings.py",
+    "index 1111111..2222222 100644",
+    "--- a/config/settings.py",
+    "+++ b/config/settings.py",
+    "@@ -10,3 +10,5 @@ import os",
+    " DEBUG = False",
+    `-AWS_KEY = "${awsCanary}"`,
+    '+AWS_KEY = os.environ["AWS_KEY"]',
+    " ",
+    `+GITHUB_TOKEN = "${githubCanary}"`,
+    "+LOG_LEVEL = 'info'",
+    "@@ -40 +42,2 @@",
+    " class Settings:",
+    `+    GOOGLE = "${googleCanary}"`,
+  ];
+  const keyFile = [
+    "diff --git a/deploy/id_rsa b/deploy/id_rsa",
+    "new file mode 100644",
+    "--- /dev/null",
+    "+++ b/deploy/id_rsa",
+    "@@ -0,0 +1,2 @@",
+    `+${pemHeader("OPENSSH PRIVATE")}`,
+    "+b3BlbnNzaC1rZXktdjEAAAAABG5vbmU=",
+    "\\ No newline at end of file",
+  ];
+  const cases = [
+    {
+      name: "removed lines, context, prose and a later hunk",
+      patch: gitPatch(settings, keyFile, [
+        "diff --git a/README.md b/README.md",
+        "--- a/README.md",
+        "+++ b/README.md",
+        "@@ -1 +1,2 @@",
+        " # Service",
+        "+Rotate keys with `aws iam create-access-key`; never commit one.",
+      ]),
+      expected: [
+        { file: "config/settings.py", line: 13, kind: "github_token" },
+        { file: "config/settings.py", line: 43, kind: "google_api_key" },
+        { file: "deploy/id_rsa", line: 1, kind: "private_key" },
+      ],
+    },
+    {
+      name: "content that looks like file headers inside a hunk",
+      patch: gitPatch([
+        "diff --git a/db/seed.sql b/db/seed.sql",
+        "--- a/db/seed.sql",
+        "+++ b/db/seed.sql",
+        "@@ -3,3 +3,4 @@",
+        "--- old comment",
+        "+++ new comment",
+        " SELECT 1;",
+        `+-- ${slackCanary}`,
+        " SELECT 2;",
+      ]),
+      expected: [{ file: "db/seed.sql", line: 5, kind: "slack_token" }],
+    },
+    {
+      name: "quoted, mnemonic-prefixed and renamed paths",
+      patch: gitPatch(
+        [
+          'diff --git "a/caf\\303\\251 \\"x\\".env" "b/caf\\303\\251 \\"x\\".env"',
+          '--- "a/caf\\303\\251 \\"x\\".env"',
+          '+++ "b/caf\\303\\251 \\"x\\".env"',
+          "@@ -1 +1 @@",
+          "-KEY=",
+          `+KEY=${awsCanary}`,
+        ],
+        [
+          "diff --git i/w.env w/w.env",
+          "--- i/w.env",
+          "+++ w/w.env",
+          "@@ -0,0 +1 @@",
+          `+KEY=${awsCanary}`,
+        ],
+        [
+          "diff --git a/old.txt b/new.txt",
+          "similarity index 100%",
+          "rename from old.txt",
+          "rename to new.txt",
+        ],
+        ["diff --git a/mode b/mode", "old mode 100644", "new mode 100755"],
+        [
+          'diff --git "a/e\\033\\q.env" "b/e\\033\\q.env"',
+          '--- "a/e\\033\\q.env"',
+          '+++ "b/e\\033\\q.env"',
+          "@@ -0,0 +1 @@",
+          `+${pemHeader("PGP PRIVATE").replace("KEY-----", "KEY BLOCK-----")}`,
+        ],
+      ),
+      expected: [
+        { file: 'café "x".env', line: 1, kind: "aws_access_key_id" },
+        { file: "w.env", line: 1, kind: "aws_access_key_id" },
+        { file: "e\u001b\\q.env", line: 1, kind: "private_key" },
+      ],
+    },
+    {
+      name: "a one-letter top-level directory without prefixes",
+      patch: gitPatch([
+        "diff --git a/x.env a/x.env",
+        "--- a/x.env",
+        "+++ a/x.env",
+        "@@ -0,0 +1 @@",
+        `+KEY=${awsCanary}`,
+      ]),
+      expected: [{ file: "a/x.env", line: 1, kind: "aws_access_key_id" }],
+    },
+    {
+      name: "hunk counts that understate or overstate the hunk",
+      patch: gitPatch(
+        [
+          "diff --git a/short b/short",
+          "--- a/short",
+          "+++ b/short",
+          "@@ -1 +1 @@",
+          "-a",
+          "+b",
+          `+T=${githubCanary}`,
+        ],
+        [
+          "diff --git a/long b/long",
+          "--- a/long",
+          "+++ b/long",
+          "@@ -1,5 +1,5 @@",
+          " only line",
+        ],
+        [
+          "diff --git a/next b/next",
+          "--- a/next",
+          "+++ b/next",
+          "@@ -0,0 +1 @@",
+          `+KEY=${awsCanary}`,
+        ],
+      ),
+      // An added line the counts cannot place is still scanned, with line 0.
+      expected: [
+        { file: "short", line: 0, kind: "github_token" },
+        { file: "next", line: 1, kind: "aws_access_key_id" },
+      ],
+    },
+    {
+      name: "a header-shaped added line after a wrong count, and a token in a file name",
+      patch: gitPatch(
+        [
+          "diff --git a/seed.sql b/seed.sql",
+          "--- a/seed.sql",
+          "+++ b/seed.sql",
+          "@@ -1,0 +1,0 @@",
+          "--- old comment",
+          `+++ KEY=${awsCanary}`,
+        ],
+        [
+          `diff --git a/${githubCanary}.txt b/${githubCanary}.txt`,
+          "--- /dev/null",
+          `+++ b/${githubCanary}.txt`,
+          "@@ -0,0 +1 @@",
+          "+hello",
+        ],
+      ),
+      // Neither header becomes a file name: the name would be the value.
+      expected: [
+        { file: "", line: 0, kind: "aws_access_key_id" },
+        { file: "", line: 0, kind: "github_token" },
+      ],
+    },
+    {
+      name: "no prefix, plain diff -u with timestamps, and CRLF",
+      patch: [
+        "diff --git a.env b.env",
+        "--- a.env",
+        "+++ b.env",
+        "@@ -1,2 +1,2 @@",
+        " # keys",
+        "-KEY=",
+        `+KEY=${stripeCanary}`,
+        "--- one.txt\t2026-11-05 10:00:00.000000000 +0100",
+        "+++ two.txt\t2026-11-05 10:00:01.000000000 +0100",
+        "@@ -1 +1 @@",
+        "-x",
+        `+${githubCanary}`,
+        "",
+      ].join("\r\n"),
+      expected: [
+        { file: "b.env", line: 2, kind: "stripe_live_key" },
+        { file: "two.txt", line: 1, kind: "github_token" },
+      ],
+    },
+    {
+      name: "documentation placeholders and near misses",
+      patch: gitPatch([
+        "diff --git a/.env.example b/.env.example",
+        "--- a/.env.example",
+        "+++ b/.env.example",
+        "@@ -0,0 +1,10 @@",
+        "+AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE",
+        "+SLACK_TOKEN=xoxb-your-bot-token",
+        `+STRIPE_KEY=sk_test_${"Canary3331".repeat(3).slice(0, 24)}`,
+        `+STRIPE_LIVE=sk_live_${"x".repeat(24)}`,
+        "+GITHUB_TOKEN=ghp_short",
+        `+GITHUB_PLACEHOLDER=ghp_${"x".repeat(36)}`,
+        `+GOOGLE_PLACEHOLDER=AIza${"X".repeat(35)}`,
+        `+PUBLIC_KEY=${pemHeader("PUBLIC")}`,
+        `+if (pem.startsWith("${pemHeader("PRIVATE")}")) load(pem);`,
+        `+GOOGLE_KEY=${googleCanary}x`,
+      ]),
+      expected: [],
+    },
+    { name: "an empty patch", patch: "", expected: [] },
+  ];
+  for (const { name, patch, expected } of cases) {
+    await t.test(name, () => {
+      assert.deepEqual(scanPatchForCredentials(patch), expected);
+    });
+  }
+  await t.test("a key embedded in a string literal still matches", () => {
+    const patch = gitPatch([
+      "diff --git a/k.ts b/k.ts",
+      "--- a/k.ts",
+      "+++ b/k.ts",
+      "@@ -0,0 +1 @@",
+      `+const key = "${pemHeader("PRIVATE")}\\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASC";`,
+    ]);
+    assert.deepEqual(scanPatchForCredentials(patch), [
+      { file: "k.ts", line: 1, kind: "private_key" },
+    ]);
+  });
+  await t.test(
+    "the error names locations, escapes odd file names and lists ten",
+    () => {
+      assert.throws(() => new CredentialExposureError([]), TypeError);
+      const given = [
+        { file: "e\u001b.env", line: 0, kind: "aws_access_key_id" },
+      ];
+      const odd = new CredentialExposureError(given);
+      given[0].line = 7;
+      assert.equal(odd.exposures[0].line, 0);
+      assert(Object.isFrozen(odd.exposures));
+      assert(odd.message.includes('"e\\u001b.env":? (aws_access_key_id)'));
+      assert(!odd.message.includes("\u001b"));
+      const many = new CredentialExposureError(
+        Array.from({ length: 12 }, (_, index) => ({
+          file: "f",
+          line: index + 1,
+          kind: "github_token",
+        })),
+      );
+      assert(
+        many.message.includes(
+          "f:10 (github_token) and 2 more; nothing was sent",
+        ),
+      );
+      assert(!many.message.includes("f:11"));
+      assert.equal(many.exposures.length, 12);
+      assert.equal(JSON.parse(JSON.stringify(many)).exposures.length, 12);
+    },
+  );
+});
+
+test("patch reviews refuse added credentials before any request and report only locations", async (t) => {
+  const patch = gitPatch([
+    "diff --git a/config/settings.py b/config/settings.py",
+    "--- a/config/settings.py",
+    "+++ b/config/settings.py",
+    "@@ -10,2 +10,2 @@",
+    " DEBUG = False",
+    `-AWS_KEY = "${awsCanary}"`,
+    `+GITHUB_TOKEN = "${githubCanary}"`,
+  ]);
+  const fixture = await server(t, (_, response) =>
+    json(response, 200, {
+      review_id: reviewId,
+      existing: false,
+      patch_digest: "d".repeat(64),
+      verify: [],
+    }),
+  );
+  const parameters = { path: { org_id: orgId, repo_id: repoId } };
+  const body = { base_commit_sha: "b".repeat(40), patch };
+  const client = new ProoflineClient({
+    baseUrl: fixture.baseUrl,
+    token,
+    patchGuard: "refuse",
+  });
+  await assert.rejects(client.requestPatchReview(parameters, body), (error) => {
+    assert(error instanceof CredentialExposureError);
+    assert(error instanceof ProoflineError);
+    assert.equal(error.status, 0);
+    assert.equal(error.type, "urn:proofline:sdk:credential-exposure");
+    assert.deepEqual(error.exposures, [
+      { file: "config/settings.py", line: 11, kind: "github_token" },
+    ]);
+    assert.equal(
+      error.message,
+      "patch review refused: the patch adds 1 credential-like value at config/settings.py:11 (github_token); nothing was sent",
+    );
+    for (const text of [
+      error.message,
+      error.detail,
+      inspect(error),
+      JSON.stringify(error),
+    ]) {
+      assert(
+        text.includes("config/settings.py:11") || text.includes('"line":11'),
+      );
+      assert(!text.includes(githubCanary));
+      assert(!text.includes(awsCanary));
+    }
+    return true;
+  });
+  assert.equal(fixture.calls.length, 0);
+
+  // Removing the added secret lets the patch through; the removed key is not scanned.
+  const accepted = await client.requestPatchReview(parameters, {
+    ...body,
+    patch: patch.replace(
+      `+GITHUB_TOKEN = "${githubCanary}"`,
+      "+GITHUB_TOKEN = None",
+    ),
+  });
+  assert.equal(accepted.review_id, reviewId);
+  assert.equal(fixture.calls.length, 1);
+  assert(fixture.calls[0].body.includes(awsCanary));
+
+  // Only patch reviews are guarded; other bodies are the server's to judge.
+  await client.uploadCoverageReports(parameters, {
+    tested_sha: "a".repeat(40),
+    reports: [
+      { name: "lcov.info", content: `SF:${githubCanary}\nend_of_record\n` },
+    ],
+  });
+  assert.equal(fixture.calls.length, 2);
+
+  // A patch that is not text is the server's to refuse, not the guard's.
+  await client.requestPatchReview(parameters, { ...body, patch: 42 });
+  assert.equal(fixture.calls.length, 3);
+
+  // The guard is off unless asked for, and refuses other settings.
+  const unguarded = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
+  const sent = await unguarded.requestPatchReview(parameters, body);
+  assert.equal(sent.review_id, reviewId);
+  assert(fixture.calls.at(-1).body.includes(githubCanary));
+  assert.throws(
+    () =>
+      new ProoflineClient({
+        baseUrl: fixture.baseUrl,
+        token,
+        patchGuard: "warn",
+      }),
+    TypeError,
+  );
 });
 
 test("pagination keeps filters and refuses cycles, incomplete metadata and resource bounds", async (t) => {
