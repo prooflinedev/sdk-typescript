@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { once } from "node:events";
+import { getEventListeners, once } from "node:events";
 import { createServer } from "node:http";
 import test from "node:test";
 import { inspect } from "node:util";
@@ -806,6 +806,56 @@ test("the wait timeout includes an in-flight request and returns the retained re
   } finally {
     clock.mock.restore();
   }
+});
+
+test("an aborted wait rejects with the caller's reason at every stage", async (t) => {
+  let mode = "running";
+  const fixture = await server(t, (_, response) => {
+    if (mode === "running") return json(response, 200, review("RUNNING"));
+    if (mode === "limited")
+      return json(response, 429, {}, { "Retry-After": "2" });
+    if (mode === "completed") return json(response, 200, review());
+  });
+  const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
+  const reason = new Error("a newer commit arrived");
+  const rejectsWithReason = (error) => error === reason;
+
+  await assert.rejects(
+    client.waitForReview(orgId, reviewId, {
+      signal: AbortSignal.abort(reason),
+    }),
+    rejectsWithReason,
+  );
+  assert.equal(fixture.calls.length, 0);
+
+  for (const [stage, abortAfterMs] of [
+    ["running", 200],
+    ["hanging", 50],
+    ["limited", 200],
+  ]) {
+    mode = stage;
+    const controller = new AbortController();
+    const started = performance.now();
+    setTimeout(() => controller.abort(reason), abortAfterMs);
+    await assert.rejects(
+      client.waitForReview(orgId, reviewId, { signal: controller.signal }),
+      rejectsWithReason,
+      stage,
+    );
+    assert(performance.now() - started < 1000, stage);
+  }
+
+  const unused = new AbortController();
+  mode = "running";
+  const timedOut = await client.waitForReview(orgId, reviewId, {
+    timeoutMs: 80,
+    signal: unused.signal,
+  });
+  assert.equal(timedOut.status, "TIMED_OUT");
+  mode = "completed";
+  for (let index = 0; index < 3; index += 1)
+    await client.waitForReview(orgId, reviewId, { signal: unused.signal });
+  assert.equal(getEventListeners(unused.signal, "abort").length, 0);
 });
 
 test("pagination keeps filters and refuses cycles, incomplete metadata and resource bounds", async (t) => {

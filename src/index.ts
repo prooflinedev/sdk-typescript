@@ -57,6 +57,7 @@ export interface ReviewOutcome {
 
 export interface WaitOptions {
   timeoutMs?: number;
+  signal?: AbortSignal;
 }
 
 export class ProoflineClient extends Operations {
@@ -150,7 +151,9 @@ export class ProoflineClient extends Operations {
     const url = this.#transport.reviewUrl(orgId, reviewId);
     let review: Review | null = null;
     let interval = 5_000;
+    const signal = options.signal;
     for (;;) {
+      signal?.throwIfAborted();
       if (performance.now() >= deadline)
         return outcome(
           "TIMED_OUT",
@@ -164,8 +167,15 @@ export class ProoflineClient extends Operations {
           "/api/v1/organizations/{org_id}/reviews/{review_id}",
           { path: { org_id: orgId, review_id: reviewId } },
           deadline,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          signal,
         );
       } catch (error) {
+        // The transport reports an aborted request as a timeout or transport error.
+        signal?.throwIfAborted();
         if (
           error instanceof ProoflineError &&
           error.type === "urn:proofline:sdk:timeout"
@@ -206,6 +216,7 @@ export class ProoflineClient extends Operations {
         );
       await sleep(
         Math.min(interval, Math.max(0, deadline - performance.now())),
+        signal,
       );
       interval = Math.min(interval * 2, 60_000);
     }
