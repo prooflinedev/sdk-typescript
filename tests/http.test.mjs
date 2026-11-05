@@ -808,6 +808,212 @@ test("the wait timeout includes an in-flight request and returns the retained re
   }
 });
 
+test("an abort signal ends the wait at every phase and never yields an outcome", async (t) => {
+  let mode = "running";
+  let reason = new Error("abort-reason-canary-3331");
+  let controller = new AbortController();
+  let skew = 0;
+  const fixture = await server(t, (_, response) => {
+    if (mode === "running") return json(response, 200, review("RUNNING"));
+    if (mode === "completed") return json(response, 200, review("COMPLETED"));
+    if (mode === "silent") {
+      // Abort while the request is in flight: no response bytes are ever sent,
+      // and the mocked clock, where a subtest installs one, jumps past the deadline.
+      controller.abort(reason);
+      skew = 10_000;
+      return;
+    }
+    if (mode === "partial") {
+      response.writeHead(200, { "Content-Type": "application/json" });
+      response.write('{"id":');
+      return;
+    }
+    if (mode === "throttled")
+      json(response, 503, { detail: responseCanary }, { "Retry-After": "30" });
+  });
+  const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
+
+  // The abort fires on the client's own progress, never on a timer, so each
+  // subtest lands in exactly the phase it names.
+  const realFetch = globalThis.fetch;
+  const abortAfterHeaders = (test) =>
+    test.mock.method(globalThis, "fetch", async (...args) => {
+      const response = await realFetch(...args);
+      controller.abort(reason);
+      return response;
+    });
+  const abortAfterBody = (test) =>
+    test.mock.method(globalThis, "fetch", async (...args) => {
+      const response = await realFetch(...args);
+      const reader = response.body.getReader();
+      const body = new ReadableStream({
+        async pull(stream) {
+          const { value, done } = await reader.read();
+          if (done) {
+            stream.close();
+            setImmediate(() => controller.abort(reason));
+          } else stream.enqueue(value);
+        },
+        cancel(cause) {
+          return reader.cancel(cause);
+        },
+      });
+      return new Response(body, {
+        status: response.status,
+        headers: response.headers,
+      });
+    });
+
+  const isAborted =
+    (detail, cause = reason) =>
+    (error) =>
+      error instanceof ProoflineError &&
+      error.status === 0 &&
+      error.type === "urn:proofline:sdk:aborted" &&
+      error.detail === detail &&
+      error.cause === cause &&
+      !error.message.includes("canary") &&
+      !inspect(error).includes("canary") &&
+      !JSON.stringify(error).includes("canary");
+  const wait = (options = {}) =>
+    client.waitForReview(orgId, reviewId, {
+      signal: controller.signal,
+      ...options,
+    });
+  const rejectsAborted = async (detail, options) => {
+    const before = fixture.calls.length;
+    const started = performance.now();
+    await assert.rejects(wait(options), isAborted(detail));
+    assert(performance.now() - started < 1_000);
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    return fixture.calls.length - before;
+  };
+
+  await t.test(
+    "an aborted signal sends nothing and outranks a zero timeout",
+    async () => {
+      controller.abort(reason);
+      assert.equal(await rejectsAborted("the review wait was aborted"), 0);
+      assert.equal(
+        await rejectsAborted("the review wait was aborted", { timeoutMs: 0 }),
+        0,
+      );
+    },
+  );
+
+  await t.test(
+    "during the pause before the next read, which would last 5 seconds",
+    async (test) => {
+      controller = new AbortController();
+      abortAfterBody(test);
+      assert.equal(
+        await rejectsAborted("the pause before the next read was aborted"),
+        1,
+      );
+    },
+  );
+
+  await t.test("while the read is in flight", async () => {
+    mode = "silent";
+    controller = new AbortController();
+    assert.equal(await rejectsAborted("the request was aborted in flight"), 1);
+  });
+
+  await t.test("while the response body is still streaming", async (test) => {
+    mode = "partial";
+    controller = new AbortController();
+    abortAfterHeaders(test);
+    assert.equal(
+      await rejectsAborted("the response body was abandoned on abort"),
+      1,
+    );
+  });
+
+  await t.test(
+    "during a Retry-After pause, which would last 30 seconds",
+    async (test) => {
+      mode = "throttled";
+      controller = new AbortController();
+      abortAfterBody(test);
+      assert.equal(await rejectsAborted("the retry pause was aborted"), 1);
+    },
+  );
+
+  await t.test("when the request ends past the deadline", async (test) => {
+    // The clock stands still until the abort, then jumps past a deadline that
+    // real time cannot reach during the test.
+    mode = "silent";
+    controller = new AbortController();
+    const observed = performance.now();
+    skew = 0;
+    test.mock.method(performance, "now", () => observed + skew);
+    await assert.rejects(
+      wait({ timeoutMs: 5_000 }),
+      isAborted("the request was aborted in flight"),
+    );
+  });
+
+  await t.test(
+    "with a reason that is itself a Proofline error",
+    async (test) => {
+      const problem = new ProoflineError(404, "about:blank", responseCanary);
+      const expired = new ProoflineError(
+        0,
+        "urn:proofline:sdk:timeout",
+        responseCanary,
+      );
+      try {
+        reason = problem;
+        mode = "partial";
+        controller = new AbortController();
+        const fetchMock = abortAfterHeaders(test);
+        await assert.rejects(
+          wait(),
+          isAborted("the response body was abandoned on abort", problem),
+        );
+        fetchMock.mock.restore();
+        reason = expired;
+        mode = "silent";
+        controller = new AbortController();
+        await assert.rejects(
+          wait(),
+          isAborted("the request was aborted in flight", expired),
+        );
+      } finally {
+        reason = new Error("abort-reason-canary-3331");
+      }
+    },
+  );
+
+  await t.test("with a timeout signal, which is still an abort", async () => {
+    mode = "running";
+    await assert.rejects(
+      client.waitForReview(orgId, reviewId, {
+        signal: AbortSignal.timeout(50),
+      }),
+      (error) =>
+        error instanceof ProoflineError &&
+        error.type === "urn:proofline:sdk:aborted" &&
+        error.cause?.name === "TimeoutError",
+    );
+  });
+
+  await t.test(
+    "with an idle signal, which changes nothing, or a non-signal",
+    async () => {
+      mode = "completed";
+      controller = new AbortController();
+      const outcome = await wait();
+      assert.equal(outcome.status, "COMPLETED");
+      assert.equal(outcome.review.status, "COMPLETED");
+      await assert.rejects(wait({ signal: {} }), TypeError);
+      const calls = fixture.calls.length;
+      await assert.rejects(wait({ timeoutMs: -1 }), TypeError);
+      assert.equal(fixture.calls.length, calls);
+    },
+  );
+});
+
 test("pagination keeps filters and refuses cycles, incomplete metadata and resource bounds", async (t) => {
   let mode = "normal";
   const fixture = await server(t, (request, response) => {

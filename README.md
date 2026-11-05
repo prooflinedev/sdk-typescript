@@ -72,6 +72,42 @@ process.stdout.write(page.text);
 // Continue with query.cursor = page.nextCursor when it is not null.
 ```
 
+## Waiting for a review
+
+`waitForReview` reads one review until it reaches a terminal state and returns a
+`ReviewOutcome`: the status, the review URL, the last review read, any assessment
+gaps, and a reason when the SDK timed out or derived `INCOMPLETE` from the
+assessments (null when the server reports the review itself as `INCOMPLETE`; see
+`gaps`). It backs off from 5 to 60 seconds between reads and stops after `timeoutMs`
+(20 minutes by default) with the status `TIMED_OUT`. Pass an `AbortSignal` to stop
+earlier, for example when a CI job is cancelled or an editor closes the panel that
+started the wait.
+
+```typescript
+const controller = new AbortController();
+const cancel = () => controller.abort(new Error("the job was cancelled"));
+process.once("SIGTERM", cancel);
+try {
+  const outcome = await client.waitForReview(orgId, reviewId, {
+    timeoutMs: 15 * 60_000,
+    signal: controller.signal,
+  });
+  console.log(outcome.status, outcome.reviewUrl);
+} finally {
+  process.off("SIGTERM", cancel);
+}
+```
+
+A timeout is a bound the SDK applied for you, so it comes back as an outcome you can
+report. An abort is a decision you made, so the wait rejects instead. The error is a
+`ProoflineError` with status 0 and type `urn:proofline:sdk:aborted`, and its `cause`
+is the signal's reason. The signal is honored while a read is in flight, while a body
+is still streaming, during the pause before the next read and during a `Retry-After`
+pause. No request is sent after it fires, and a signal that is already aborted sends
+none at all. `AbortSignal.timeout(ms)` and `AbortSignal.any([...])` compose with it
+as usual; a timeout signal you pass is still an abort and rejects, so keep
+`timeoutMs` for a `TIMED_OUT` outcome you can report.
+
 ## Development
 
 The repository bundles its public API contract in `openapi.public.json`.
