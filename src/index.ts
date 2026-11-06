@@ -16,11 +16,23 @@ export type { ExportPage, ExportParameters } from "./exports.js";
 
 import { type ListReviewsParameters, Operations } from "./operations.js";
 import type { components } from "./schema.js";
-import { type ClientOptions, sleep, Transport } from "./transport.js";
+import {
+  type ClientOptions,
+  signalOption,
+  sleep,
+  Transport,
+} from "./transport.js";
 
 export type * from "./operations.js";
 export type { components, operations, paths } from "./schema.js";
-export type { ClientOptions } from "./transport.js";
+export type {
+  ClientOptions,
+  FetchFunction,
+  ProoflineRequestEvent,
+  ProoflineResponseEvent,
+  ProoflineRetryEvent,
+  TransportHooks,
+} from "./transport.js";
 export { ProoflineError, SecretToken } from "./transport.js";
 
 export type Review = components["schemas"]["CustomerReviewDetail"];
@@ -57,6 +69,8 @@ export interface ReviewOutcome {
 
 export interface WaitOptions {
   timeoutMs?: number;
+  /** Stops the wait; the promise rejects with `signal.reason`. */
+  signal?: AbortSignal;
 }
 
 export class ProoflineClient extends Operations {
@@ -143,6 +157,8 @@ export class ProoflineClient extends Operations {
     reviewId: string,
     options: WaitOptions = {},
   ): Promise<ReviewOutcome> {
+    const cancel = signalOption(options.signal);
+    cancel?.throwIfAborted();
     const timeout = options.timeoutMs ?? 20 * 60_000;
     if (!Number.isFinite(timeout) || timeout < 0)
       throw new TypeError("timeoutMs must be finite and nonnegative");
@@ -164,6 +180,11 @@ export class ProoflineClient extends Operations {
           "/api/v1/organizations/{org_id}/reviews/{review_id}",
           { path: { org_id: orgId, review_id: reviewId } },
           deadline,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          cancel,
         );
       } catch (error) {
         if (
@@ -206,6 +227,7 @@ export class ProoflineClient extends Operations {
         );
       await sleep(
         Math.min(interval, Math.max(0, deadline - performance.now())),
+        cancel,
       );
       interval = Math.min(interval * 2, 60_000);
     }

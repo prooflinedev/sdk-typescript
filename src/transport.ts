@@ -1,6 +1,7 @@
 const VERSION = "2.0.0";
 const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
-const MAX_RETRIES = 3;
+const DEFAULT_RETRIES = 3;
+const MAX_RETRIES = 10;
 const MAX_RETRY_SECONDS = 60;
 const inspect = Symbol.for("nodejs.util.inspect.custom");
 
@@ -71,10 +72,53 @@ export class ProoflineError extends Error {
   }
 }
 
+/** Called with `(url, init)` for every HTTP attempt; defaults to global `fetch`. */
+export type FetchFunction = (
+  input: URL,
+  init: RequestInit,
+) => Promise<Response>;
+
+/** One HTTP attempt. `url` never contains the token; headers are not exposed. */
+export interface ProoflineRequestEvent {
+  method: string;
+  url: string;
+  /** Zero for the first attempt, then one higher for each retry. */
+  attempt: number;
+}
+
+export interface ProoflineResponseEvent extends ProoflineRequestEvent {
+  status: number;
+  /** Time from sending the attempt until its response headers arrived. */
+  durationMs: number;
+}
+
+export interface ProoflineRetryEvent extends ProoflineRequestEvent {
+  /** The refused status that triggered the retry (429 or 503). */
+  status: number;
+  /** How long the client waits before the next attempt. */
+  delayMs: number;
+}
+
+/**
+ * Observers for logging and telemetry. Hooks run synchronously, their return
+ * values are ignored, and an error or rejected promise from a hook never
+ * changes the request outcome.
+ */
+export interface TransportHooks {
+  onRequest?: (event: ProoflineRequestEvent) => unknown;
+  onResponse?: (event: ProoflineResponseEvent) => unknown;
+  onRetry?: (event: ProoflineRetryEvent) => unknown;
+}
+
 export interface ClientOptions {
   baseUrl: string;
   token?: string | SecretToken;
   requestTimeoutMs?: number;
+  /** Replaces global `fetch`, for example to route through a proxy. */
+  fetch?: FetchFunction;
+  /** Retries for refused reads (429/503), from 0 to 10. Defaults to 3. */
+  maxRetries?: number;
+  hooks?: TransportHooks;
 }
 
 export interface Parameters {
@@ -256,14 +300,72 @@ function httpDate(value: string): number {
     : Number.NaN;
 }
 
-export function sleep(milliseconds: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+export function sleep(
+  milliseconds: number,
+  signal?: AbortSignal,
+): Promise<void> {
+  if (signal?.aborted) return Promise.reject(signal.reason);
+  return new Promise((resolve, reject) => {
+    const abort = () => {
+      clearTimeout(timer);
+      reject(signal?.reason);
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", abort);
+      resolve();
+    }, milliseconds);
+    signal?.addEventListener("abort", abort, { once: true });
+  });
+}
+
+function retries(value: unknown): number {
+  if (
+    typeof value !== "number" ||
+    !Number.isInteger(value) ||
+    value < 0 ||
+    value > MAX_RETRIES
+  )
+    throw new TypeError(
+      `maxRetries must be an integer from 0 to ${MAX_RETRIES}`,
+    );
+  return value;
+}
+
+function hooks(value: unknown): TransportHooks {
+  if (value === null || typeof value !== "object")
+    throw new TypeError("hooks must be an object");
+  for (const name of ["onRequest", "onResponse", "onRetry"] as const) {
+    const hook = (value as Record<string, unknown>)[name];
+    if (hook !== undefined && typeof hook !== "function")
+      throw new TypeError(`hooks.${name} must be a function`);
+  }
+  return value as TransportHooks;
+}
+
+function notify<E>(hook: ((event: E) => unknown) | undefined, event: E): void {
+  if (!hook) return;
+  try {
+    const result = hook(Object.freeze(event));
+    if (result instanceof Promise) result.catch(() => {});
+  } catch {
+    // Observers must never change what the request returns or throws.
+  }
+}
+
+export function signalOption(value: unknown): AbortSignal | undefined {
+  if (value === undefined) return undefined;
+  if (!(value instanceof AbortSignal))
+    throw new TypeError("signal must be an AbortSignal");
+  return value;
 }
 
 export class Transport {
   readonly #base: URL;
   readonly #token: SecretToken;
   readonly #timeout: number;
+  readonly #fetch: FetchFunction;
+  readonly #maxRetries: number;
+  readonly #hooks: TransportHooks;
 
   constructor(options: ClientOptions) {
     this.#base = origin(options.baseUrl);
@@ -274,6 +376,14 @@ export class Transport {
       options.requestTimeoutMs ?? 30_000,
       "requestTimeoutMs",
     );
+    if (options.fetch !== undefined && typeof options.fetch !== "function")
+      throw new TypeError("fetch must be a function");
+    this.#fetch = options.fetch ?? ((input, init) => fetch(input, init));
+    this.#maxRetries =
+      options.maxRetries === undefined
+        ? DEFAULT_RETRIES
+        : retries(options.maxRetries);
+    this.#hooks = options.hooks === undefined ? {} : hooks(options.hooks);
   }
 
   reviewUrl(orgId: string, reviewId: string): string {
@@ -293,7 +403,9 @@ export class Transport {
       JSON.parse(text),
     accept = "application/json, application/problem+json",
     mcpPhase?: "initialize" | "notification" | "call",
+    cancel?: AbortSignal,
   ): Promise<T> {
+    cancel?.throwIfAborted();
     const path = Object.entries(parameters.path ?? {}).reduce(
       (value, [key, coordinateValue]) =>
         value.replace(`{${key}}`, coordinate(coordinateValue)),
@@ -335,10 +447,14 @@ export class Transport {
           "the request deadline expired",
         );
       const requestDeadline = now + remaining;
-      const signal = AbortSignal.timeout(Math.ceil(remaining));
+      const timer = AbortSignal.timeout(Math.ceil(remaining));
+      const signal = cancel ? AbortSignal.any([timer, cancel]) : timer;
+      const event = { method, url: url.href, attempt };
+      notify(this.#hooks.onRequest, { ...event });
+      const send = this.#fetch;
       let response: Response;
       try {
-        response = await fetch(url, {
+        response = await send(url, {
           method,
           headers,
           ...(requestBody === undefined ? {} : { body: requestBody }),
@@ -347,6 +463,7 @@ export class Transport {
           signal,
         });
       } catch {
+        cancel?.throwIfAborted();
         if (signal.aborted && waitTimeout)
           throw new ProoflineError(
             0,
@@ -359,6 +476,11 @@ export class Transport {
           "the request did not receive a response within its timeout",
         );
       }
+      notify(this.#hooks.onResponse, {
+        ...event,
+        status: response.status,
+        durationMs: performance.now() - now,
+      });
       if (mcpPhase && response.ok) {
         const notification = mcpPhase === "notification";
         if (
@@ -377,20 +499,26 @@ export class Transport {
         }
         if (notification && !response.body) return undefined as T;
       }
-      const value = await decoded(
-        response,
-        requestDeadline,
-        signal,
-        waitTimeout,
-        decode,
-      );
+      let value: unknown;
+      try {
+        value = await decoded(
+          response,
+          requestDeadline,
+          signal,
+          waitTimeout,
+          decode,
+        );
+      } catch (error) {
+        cancel?.throwIfAborted();
+        throw error;
+      }
       if (response.ok) return value as T;
       const error = problem(response.status, value);
       const delay = retryDelay(response.headers.get("Retry-After"), attempt);
       if (
         method !== "GET" ||
         ![429, 503].includes(response.status) ||
-        attempt >= MAX_RETRIES ||
+        attempt >= this.#maxRetries ||
         delay === undefined
       )
         throw error;
@@ -401,7 +529,12 @@ export class Transport {
           "the review timeout expires before the server permits a retry",
         );
       }
-      await sleep(delay);
+      notify(this.#hooks.onRetry, {
+        ...event,
+        status: response.status,
+        delayMs: delay,
+      });
+      await sleep(delay, cancel);
     }
   }
 }
