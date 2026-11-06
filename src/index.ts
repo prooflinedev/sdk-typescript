@@ -14,7 +14,11 @@ import {
 
 export type { ExportPage, ExportParameters } from "./exports.js";
 
-import { type ListReviewsParameters, Operations } from "./operations.js";
+import {
+  type ListPullRequestReviewsParameters,
+  type ListReviewsParameters,
+  Operations,
+} from "./operations.js";
 import type { components } from "./schema.js";
 import { type ClientOptions, sleep, Transport } from "./transport.js";
 
@@ -93,6 +97,27 @@ export class ProoflineClient extends Operations {
     parameters: ListReviewsParameters,
     options: { maxPages?: number; maxItems?: number } = {},
   ): AsyncGenerator<components["schemas"]["ReviewSummary"]> {
+    yield* this.#iterReviewPages(parameters, options, (pageParameters) =>
+      this.listReviews(pageParameters),
+    );
+  }
+
+  async *iterPullRequestReviews(
+    parameters: ListPullRequestReviewsParameters,
+    options: { maxPages?: number; maxItems?: number } = {},
+  ): AsyncGenerator<components["schemas"]["ReviewSummary"]> {
+    yield* this.#iterReviewPages(parameters, options, (pageParameters) =>
+      this.listPullRequestReviews(pageParameters),
+    );
+  }
+
+  async *#iterReviewPages<Parameters extends ListReviewsParameters>(
+    parameters: Parameters,
+    options: { maxPages?: number; maxItems?: number },
+    loadPage: (
+      parameters: Parameters,
+    ) => Promise<components["schemas"]["ReviewPage"]>,
+  ): AsyncGenerator<components["schemas"]["ReviewSummary"]> {
     const maxPages = integerLimit(options.maxPages ?? 100, "maxPages");
     const maxItems = integerLimit(options.maxItems ?? 10_000, "maxItems");
     const seen = new Set<string>();
@@ -103,7 +128,7 @@ export class ProoflineClient extends Operations {
         ...parameters.query,
         ...(cursor === undefined ? {} : { cursor }),
       };
-      const page = await this.listReviews({ ...parameters, query });
+      const page = await loadPage({ ...parameters, query });
       if (
         !isObject(page) ||
         !Array.isArray(page.items) ||

@@ -823,58 +823,187 @@ test("the wait timeout includes an in-flight request and returns the retained re
   }
 });
 
-test("pagination keeps filters and refuses cycles, incomplete metadata and resource bounds", async (t) => {
-  let mode = "normal";
-  const fixture = await server(t, (request, response) => {
-    if (mode === "malformed") return json(response, 200, null);
-    const cursor = new URL(request.url, "http://127.0.0.1").searchParams.get(
-      "cursor",
-    );
-    const more = mode !== "normal" || cursor === null;
-    return json(response, 200, {
-      items: [{ id: cursor ? "second" : "first" }],
-      truncated: more,
-      next_cursor: mode === "missing" ? null : more ? "next" : null,
-      filters: { repositories: [], environments: [], authors: [] },
+for (const method of ["iterReviews", "iterPullRequestReviews"]) {
+  test(`${method} preserves routing and filters and enforces pagination guards`, async (t) => {
+    let mode = "normal";
+    let pageIndex = 0;
+    const fixture = await server(t, (request, response) => {
+      const malformed = {
+        null: null,
+        items: { items: {}, truncated: false },
+        truncated: { items: [], truncated: "false" },
+        cursor: { items: [], truncated: true, next_cursor: 42 },
+        unexpected: { items: [], truncated: false, next_cursor: "next" },
+      };
+      if (Object.hasOwn(malformed, mode))
+        return json(response, 200, malformed[mode]);
+      if (mode === "long-cycle") {
+        return json(response, 200, {
+          items: [],
+          truncated: true,
+          next_cursor: ["a", "b", "a"][pageIndex++],
+        });
+      }
+      const cursor = new URL(request.url, "http://127.0.0.1").searchParams.get(
+        "cursor",
+      );
+      const more = mode !== "normal" || cursor === null;
+      return json(response, 200, {
+        items: [{ id: cursor ? "second" : "first" }],
+        truncated: more,
+        next_cursor: mode === "missing" ? null : more ? "next" : null,
+        filters: { repositories: [], environments: [], authors: [] },
+      });
     });
+    const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
+    const parameters = {
+      path: {
+        org_id: orgId,
+        repository: "owner/repo",
+        pull_request_number: 42,
+      },
+      query: { repository: repoId, status: "COMPLETED", limit: 2 },
+    };
+    const original = structuredClone(parameters);
+    const items = await Array.fromAsync(client[method](parameters));
+    assert.deepEqual(
+      items.map((item) => item.id),
+      ["first", "second"],
+    );
+    assert.deepEqual(parameters, original);
+    for (const call of fixture.calls) {
+      const url = new URL(call.url, fixture.baseUrl);
+      assert.equal(
+        url.pathname,
+        method === "iterReviews"
+          ? `/api/v1/organizations/${orgId}/reviews`
+          : `/api/v1/organizations/${orgId}/reviews/pr/owner%2Frepo/42`,
+      );
+      assert.equal(url.searchParams.get("repository"), repoId);
+      assert.equal(url.searchParams.get("status"), "COMPLETED");
+      assert.equal(url.searchParams.get("limit"), "2");
+      assert.equal(call.authorization, `Bearer ${token}`);
+    }
+    assert.equal(
+      new URL(fixture.calls[1].url, fixture.baseUrl).searchParams.get("cursor"),
+      "next",
+    );
+    for (const failure of [
+      "cycle",
+      "long-cycle",
+      "missing",
+      "null",
+      "items",
+      "truncated",
+      "cursor",
+      "unexpected",
+    ]) {
+      mode = failure;
+      await assert.rejects(
+        Array.fromAsync(client[method](parameters)),
+        (error) =>
+          error instanceof ProoflineError &&
+          error.type === "urn:proofline:sdk:invalid-response",
+      );
+    }
+    mode = "normal";
+    for (const options of [{ maxPages: 1 }, { maxItems: 1 }]) {
+      await assert.rejects(
+        Array.fromAsync(client[method](parameters, options)),
+        (error) => error.type === "urn:proofline:sdk:invalid-response",
+      );
+    }
+    // A complete collection exactly at the limits is not truncated or rejected.
+    assert.equal(
+      (
+        await Array.fromAsync(
+          client[method](parameters, { maxPages: 2, maxItems: 2 }),
+        )
+      ).length,
+      2,
+    );
+    const beforeInvalid = fixture.calls.length;
+    for (const key of ["maxPages", "maxItems"]) {
+      for (const value of [
+        0,
+        -1,
+        1.5,
+        NaN,
+        Infinity,
+        Number.MAX_SAFE_INTEGER + 1,
+      ]) {
+        await assert.rejects(
+          Array.fromAsync(client[method](parameters, { [key]: value })),
+          TypeError,
+        );
+      }
+    }
+    assert.equal(fixture.calls.length, beforeInvalid);
   });
-  const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
-  const parameters = { path: { org_id: orgId }, query: { repository: repoId } };
-  const items = await Array.fromAsync(client.iterReviews(parameters));
-  assert.deepEqual(
-    items.map((item) => item.id),
-    ["first", "second"],
-  );
-  assert(
-    fixture.calls.every(({ url }) => url.includes(`repository=${repoId}`)),
-  );
-  mode = "cycle";
-  await assert.rejects(
-    Array.fromAsync(client.iterReviews(parameters)),
-    (error) => error.type === "urn:proofline:sdk:invalid-response",
-  );
-  mode = "missing";
-  await assert.rejects(
-    Array.fromAsync(client.iterReviews(parameters)),
-    (error) => error.type === "urn:proofline:sdk:invalid-response",
-  );
-  mode = "normal";
-  await assert.rejects(
-    Array.fromAsync(client.iterReviews(parameters, { maxPages: 1 })),
-    (error) => error.type === "urn:proofline:sdk:invalid-response",
-  );
-  await assert.rejects(
-    Array.fromAsync(client.iterReviews(parameters, { maxItems: 1 })),
-    (error) => error.type === "urn:proofline:sdk:invalid-response",
-  );
-  mode = "malformed";
-  await assert.rejects(
-    Array.fromAsync(client.iterReviews(parameters)),
-    (error) =>
-      error instanceof ProoflineError &&
-      error.type === "urn:proofline:sdk:invalid-response",
-  );
-});
+
+  test(`${method} preserves opaque initial cursors and stops fetching on early exit`, async (t) => {
+    const initial = "initial/+?=& cursor";
+    const next = "next/+?=& cursor";
+    const fixture = await server(t, (request, response) => {
+      const cursor = new URL(request.url, "http://127.0.0.1").searchParams.get(
+        "cursor",
+      );
+      assert.equal(cursor, initial);
+      json(response, 200, {
+        items: [{ id: "first" }, { id: "second" }],
+        truncated: true,
+        next_cursor: next,
+      });
+    });
+    const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
+    const parameters = {
+      path: {
+        org_id: orgId,
+        repository: "owner/repo",
+        pull_request_number: 42,
+      },
+      query: { cursor: initial },
+    };
+    const iterator = client[method](parameters);
+    assert.equal(fixture.calls.length, 0);
+    for await (const item of iterator) {
+      assert.equal(item.id, "first");
+      break;
+    }
+    assert.equal(fixture.calls.length, 1);
+    assert.equal(parameters.query.cursor, initial);
+  });
+
+  test(`${method} advances opaque cursors across empty pages`, async (t) => {
+    const cursors = ["initial/+?=& cursor", "next/+?=& cursor"];
+    const fixture = await server(t, (request, response, calls) => {
+      assert.equal(
+        new URL(request.url, "http://127.0.0.1").searchParams.get("cursor"),
+        cursors[calls.length - 1],
+      );
+      json(
+        response,
+        200,
+        calls.length === 1
+          ? { items: [], truncated: true, next_cursor: cursors[1] }
+          : { items: [{ id: "last" }], truncated: false, next_cursor: null },
+      );
+    });
+    const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
+    const items = await Array.fromAsync(
+      client[method]({
+        path: {
+          org_id: orgId,
+          repository: "owner/repo",
+          pull_request_number: 42,
+        },
+        query: { cursor: cursors[0] },
+      }),
+    );
+    assert.deepEqual(items, [{ id: "last" }]);
+    assert.equal(fixture.calls.length, 2);
+  });
+}
 
 test("credentials remain on the configured origin and malformed responses carry no raw body", async (t) => {
   for (const baseUrl of [
