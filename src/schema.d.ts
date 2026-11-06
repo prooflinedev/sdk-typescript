@@ -585,15 +585,6 @@ export interface components {
         };
         /** @enum {string} */
         AgentVendor: "CURSOR_CLOUD_AGENTS" | "DEVIN";
-        ApprovalGap: {
-            /**
-             * Format: uuid
-             * @description Assessment whose approval could not supply deferred occurrence questions.
-             */
-            assessment_id: string;
-            /** @description Reason the assessment's approval could not supply deferred occurrence questions. */
-            code: string;
-        };
         AssessmentProjection: {
             /**
              * Format: uuid
@@ -614,28 +605,6 @@ export interface components {
             /** @description Environment reach retained by the plan. */
             reach: string;
         };
-        /** @description How one condition relates to the review's base revision. */
-        AttributedChange: "INTRODUCED" | "CHANGED" | "UNCHANGED" | "RESOLVED" | "UNATTRIBUTED";
-        AttributedConditionView: {
-            /** @description How this condition relates to the review's base revision. */
-            change: components["schemas"]["AttributedChange"];
-            /** @description The member that declares the site at each revision that declares it. */
-            reviewed_tree_citations: components["schemas"]["ReviewedTreeCitationView"][];
-            /**
-             * @description The revision that holds the condition: the base for `RESOLVED`, the
-             *      proposed revision for `INTRODUCED`, `CHANGED` and `UNCHANGED`, and
-             *      either for `UNATTRIBUTED`.
-             */
-            revision: components["schemas"]["AttributedRevision"];
-            /**
-             * @description World's label of the condition's site and what it declares, such as
-             *      `.github/workflows/ci.yml jobs.test.steps[0].uses: actions/checkout@v4`.
-             *      It quotes repository text.
-             */
-            subject: components["schemas"]["UntrustedText"];
-        };
-        AttributedRevision: "PROPOSED_CODE_REVISION" | "BASE_CODE_REVISION";
-        AttributionStatus: "COMPARED" | "UNAVAILABLE" | "UNREADABLE";
         AuthorChoice: {
             /**
              * Format: int64
@@ -648,84 +617,6 @@ export interface components {
              *      when none is recorded.
              */
             login?: string | null;
-        };
-        /** @enum {string} */
-        Authority: "ADVISORY" | "DEPLOYMENT_POLICY";
-        Availability: ("RECORDED" | "NOT_RECORDED" | "LEGACY" | "OPERATIONAL_FAILURE") | "LIMITED";
-        /** @description How the capture ended. */
-        CaptureState: "PENDING" | "RECORDED" | "UNBOUND" | "NOT_EXECUTED" | "INCOMPLETE";
-        /**
-         * @description Which conditions behind a check's result the change brought, and which
-         *      World found at the review's base revision. It sits beside the result and
-         *      never changes it: a condition already at the base is still a condition.
-         */
-        ChangeAttributionView: {
-            /**
-             * @description Where every condition is recorded when some are omitted. Absent when
-             *      `conditions` lists them all.
-             */
-            complete_record?: components["schemas"]["CompleteRecordView"] | null;
-            /**
-             * Format: uint32
-             * @description How many conditions World attributed, listed or not. Zero unless
-             *      `status` is `COMPARED`.
-             */
-            condition_count: number;
-            /**
-             * @description Every condition, each once, in World's order, never netted against
-             *      another. Empty unless `status` is `COMPARED`, and empty when some are
-             *      omitted: it never lists only some of them.
-             */
-            conditions: components["schemas"]["AttributedConditionView"][];
-            /**
-             * @description How many conditions there are of each change at each revision, over
-             *      every condition, listed or not. Changes with none are left out.
-             */
-            counts: components["schemas"]["ChangeCountView"][];
-            /**
-             * @description World's code for why it could not read that revision, such as
-             *      `BASE_REVIEWED_TREE_NOT_DECLARED`. Present exactly when `status` is
-             *      `UNAVAILABLE`.
-             */
-            detail_code?: string | null;
-            /**
-             * @description The conditions a summary lists when some are omitted: the first ones
-             *      in the order `counts` gives, each whole, at most 50 and always fewer
-             *      than `condition_count`. Present exactly when `omitted_condition_count`
-             *      is not zero.
-             */
-            listed_conditions?: components["schemas"]["AttributedConditionView"][] | null;
-            /**
-             * Format: uint32
-             * @description How many of those conditions this response does not list. Zero when
-             *      the result kept World's attribution whole. Otherwise the result kept a
-             *      summary: `listed_conditions` lists the first ones, `counts` is still
-             *      exact, and World's recorded evaluation holds every condition.
-             */
-            omitted_condition_count: number;
-            /**
-             * @description The revision World could not read. Present exactly when `status` is
-             *      `UNAVAILABLE`.
-             */
-            revision?: components["schemas"]["AttributedRevision"] | null;
-            /**
-             * @description Whether World compared both revisions, could not read one, or recorded
-             *      an attribution this build cannot read.
-             */
-            status: components["schemas"]["AttributionStatus"];
-        };
-        /** @description How many conditions are of one change at one revision. */
-        ChangeCountView: {
-            /** @description How the counted conditions relate to the review's base revision. */
-            change: components["schemas"]["AttributedChange"];
-            /**
-             * Format: uint32
-             * @description How many conditions have this `change` at this `revision`, over every
-             *      condition, listed or not.
-             */
-            count: number;
-            /** @description The revision that holds the counted conditions. */
-            revision: components["schemas"]["AttributedRevision"];
         };
         /** @enum {string} */
         ChangeDiagramKindView: "FLOWCHART" | "SEQUENCE";
@@ -898,16 +789,6 @@ export interface components {
             review_id: string;
         };
         /**
-         * @description World's immutable record of the complete answer an omitted list comes
-         *      from.
-         */
-        CompleteRecordView: {
-            /** @description The `sha256:` digest of the complete attribution in that record. */
-            attribution_digest: string;
-            /** @description The evaluation World recorded, which holds every condition. */
-            world_evaluation_id: string;
-        };
-        /**
          * @description An upload refused for its content: a symbolic or unknown commit, or a
          *      report that cannot be read. Nothing is stored.
          */
@@ -970,18 +851,6 @@ export interface components {
              */
             completed_at?: string | null;
             /**
-             * @description The retained decision disclosure, which grants no deployment
-             *      authorization. Absent when none is recorded and the review kind
-             *      records no decision basis.
-             */
-            decision_presentation?: components["schemas"]["CustomerDecision"] | null;
-            /**
-             * @description What World declares depends on what this change deploys in this
-             *      environment, at the assessment's pinned snapshot. Absent when the
-             *      assessment's kind records no declared reach.
-             */
-            declared_reach?: components["schemas"]["DeclaredReachView"] | null;
-            /**
              * @description The risk domains the assessment evaluated, each with its status and
              *      reason, ordered by domain.
              */
@@ -1032,18 +901,6 @@ export interface components {
              * @description When the assessment completed. Null while it has not.
              */
             completed_at?: string | null;
-            /**
-             * @description The retained decision disclosure, which grants no deployment
-             *      authorization. Absent when none is recorded and the review kind
-             *      records no decision basis.
-             */
-            decision_presentation?: components["schemas"]["CustomerDecision"] | null;
-            /**
-             * @description What World declares depends on what this change deploys in this
-             *      environment, at the assessment's pinned snapshot. Absent when the
-             *      assessment's kind records no declared reach.
-             */
-            declared_reach?: components["schemas"]["DeclaredReachView"] | null;
             /**
              * @description The risk domains the assessment evaluated, each with its status and
              *      reason, ordered by domain.
@@ -1098,13 +955,6 @@ export interface components {
             subjects: components["schemas"]["SubjectView"][];
         };
         CustomerCheck: {
-            /**
-             * @description Which conditions behind the outcome the change brought and which were
-             *      already at the review's base revision. It never changes the outcome:
-             *      a condition already at the base is pre-existing, not safe. Absent for
-             *      a check whose evaluator does not compare the two revisions.
-             */
-            change_attribution?: components["schemas"]["ChangeAttributionView"] | null;
             /**
              * @description Why World refused the check, or otherwise World's recorded explanation
              *      of the result. Null when neither is recorded.
@@ -1200,33 +1050,6 @@ export interface components {
             started_at?: string | null;
             /** @description The code assessment's recorded execution status. */
             status: components["schemas"]["CodeAssessmentStatus"];
-        };
-        CustomerDecision: {
-            /** @description Whether the decision is `ADVISORY` or comes from a `DEPLOYMENT_POLICY`. */
-            authority: components["schemas"]["Authority"];
-            /**
-             * @description Whether a verified decision record is present, absent, legacy, failed,
-             *      or too large for this projection.
-             */
-            availability: components["schemas"]["Availability"];
-            /**
-             * @description The permission, evidence classification and reason code of the
-             *      verified recorded basis. Null when no verified basis is recorded.
-             */
-            basis?: components["schemas"]["CustomerDecisionBasis"] | null;
-            /**
-             * @description The local deployment gate state and any recorded override. Null unless
-             *      the decision belongs to a deployment gate.
-             */
-            gate_state?: components["schemas"]["GateState"] | null;
-        };
-        CustomerDecisionBasis: {
-            /** @description How the recorded basis classified its evidence. */
-            evidence: components["schemas"]["EvidenceView"];
-            /** @description The permission the recorded basis reached: `PERMIT` or `BLOCK`. */
-            permission: components["schemas"]["PermissionView"];
-            /** @description The reason code the recorded basis gives for its permission. */
-            reason_code: string;
         };
         CustomerEvidenceRef: {
             /**
@@ -1414,6 +1237,11 @@ export interface components {
              *      the automatic decision.
              */
             actor_login?: string | null;
+            /**
+             * @description The actor's GitHub profile name, when known. Lead with it; the login
+             *      is the fallback. Null for the automatic decision.
+             */
+            actor_name?: string | null;
             /** @description For `ALREADY_COVERED`, `HUMAN` or `BOT`. Null for every other decision. */
             covering_author_kind?: string | null;
             /**
@@ -1621,6 +1449,11 @@ export interface components {
             pull_request_author_github_user_id?: number | null;
             /** @description Provider display metadata for the pull request author, not the rerun requester. */
             pull_request_author_login?: string | null;
+            /**
+             * @description The author's GitHub profile name, when known. Lead with it; the login
+             *      is the fallback. Display metadata, never identity.
+             */
+            pull_request_author_name?: string | null;
             /** @description The author's profile on the deployment's GitHub host. Absent when no author login is known. */
             pull_request_author_url?: string | null;
             /**
@@ -1741,44 +1574,6 @@ export interface components {
         };
         /** @enum {string} */
         Dataset: "reviews" | "finding_outcomes" | "finding_validations" | "spend" | "findings";
-        /** @enum {string} */
-        DeclaredReachOutcome: "READ" | "NO_ROOTS" | "ROOTS_UNKNOWN" | "UNAVAILABLE";
-        /**
-         * @description One assessment's declared reach receipt. A reached entity declares a
-         *      dependency on what the change deploys; it is never a claim that the change
-         *      breaks it.
-         */
-        DeclaredReachView: {
-            /**
-             * @description Whether World's walk ended with no gap. An empty, incomplete reach
-             *      says nothing about what depends on the change.
-             */
-            complete: boolean;
-            /** @description Every reached entity, shorter paths first, then by kind. */
-            entities: components["schemas"]["ReachedEntityView"][];
-            /** @description Where World's walk or its evidence stopped. */
-            gaps: components["schemas"]["ReachGapView"][];
-            /**
-             * @description `READ` when World answered, `NO_ROOTS` when no evidence bound a
-             *      deployed artifact or workload to the repository, `ROOTS_UNKNOWN` when
-             *      World's evidence does not establish which revision runs, and
-             *      `UNAVAILABLE` when World gave no answer. Only `READ` carries entities or gaps.
-             */
-            outcome: components["schemas"]["DeclaredReachOutcome"];
-            /** @description World's digest of its full answer. Null unless `READ`. */
-            receipt_digest?: string | null;
-            /**
-             * Format: uuid
-             * @description The World snapshot the reach was read at. Null unless `READ`.
-             */
-            snapshot_id?: string | null;
-            /**
-             * @description The Terraform addresses the reach also started from, or why it took
-             *      none. Absent when the assessment read reach only from the deployed
-             *      revision.
-             */
-            terraform?: components["schemas"]["TerraformRootsView"] | null;
-        };
         DeepReviewEscalation: {
             /** @description A fixed customer explanation; internal admission errors are withheld. */
             reason: string;
@@ -1823,8 +1618,6 @@ export interface components {
             /** @description Severity used by the series count; the linked occurrence may be less severe. */
             severity: string;
         };
-        /** @enum {string} */
-        EvidenceView: "REQUIRED_PROPERTIES_ESTABLISHED" | "INCOMPLETE" | "NO_APPLICABLE_OBLIGATIONS";
         /** @enum {string} */
         ExportEvidenceKind: "repository_file" | "repository_file_at_commit" | "companion_repository_file" | "commit" | "workflow_run" | "world_entity" | "deterministic_test" | "recorded_read" | "text";
         ExportEvidenceRef: {
@@ -2300,21 +2093,6 @@ export interface components {
             /** @description The finding's recorded severity. */
             severity: components["schemas"]["ExportFindingSeverity"];
         };
-        GateState: {
-            /**
-             * @description The occurrence questions the gate's approval deferred, as each
-             *      observed execution of its deployment answered them. Outcome-only
-             *      records: none of them changes the gate or grades a prediction.
-             */
-            occurrence_captures: components["schemas"]["OccurrenceCapture"][];
-            /** @description Recorded override authorization, not confirmation of provider delivery. */
-            override_record?: components["schemas"]["Override"] | null;
-            /**
-             * @description Local gate state. ALLOWED/BLOCKED can precede provider delivery.
-             *      This field does not confirm that GitHub released or blocked a run.
-             */
-            status: string;
-        };
         /** @enum {string} */
         GateStatus: "REQUESTED" | "EVALUATING" | "ALLOWED" | "BLOCKED" | "BYPASSED" | "SUPERSEDED";
         /**
@@ -2379,42 +2157,6 @@ export interface components {
              *      never a complete assessment.
              */
             incompleteness_kind?: string | null;
-        };
-        /** @description The capture of one observed execution of a gate's deployment. */
-        OccurrenceCapture: {
-            /** @description Assessments whose approval could defer nothing, with the reason. */
-            approval_gaps: components["schemas"]["ApprovalGap"][];
-            /** @description Explanation of the capture's outcome, when available. */
-            detail?: string | null;
-            /** @description Retained identity of the deployment occurrence, when available. */
-            occurrence_key?: string | null;
-            /** @description Deferred questions and their binding or observed results for this occurrence. */
-            questions: components["schemas"]["OccurrenceQuestion"][];
-            /** @description Whether the capture is pending, recorded, unbound, not executed, or incomplete. */
-            state: components["schemas"]["CaptureState"];
-        };
-        /** @description One deferred question as the gate presents it. */
-        OccurrenceQuestion: {
-            /**
-             * Format: uuid
-             * @description Assessment whose approval deferred this question.
-             */
-            assessment_id: string;
-            /** @description World's binding or refusal code, or the control plane's own gap. */
-            code?: string | null;
-            /** @description Hypothesis family key for the deferred question. */
-            family_key: string;
-            /**
-             * Format: int32
-             * @description Hypothesis family version for the deferred question.
-             */
-            family_version: number;
-            /** @description World's observed result once it recorded the question. */
-            observed_result?: string | null;
-            /** @description World outcome record identifier, when an observed result was recorded. */
-            outcome_id?: string | null;
-            /** @description Whether the question is pending, recorded, unbound, or not executed. */
-            state: components["schemas"]["QuestionState"];
         };
         OpenFindingCounts: {
             /**
@@ -2499,29 +2241,6 @@ export interface components {
         };
         /** @enum {string} */
         Outcome: "ALLOW" | "BLOCK";
-        Override: {
-            /**
-             * @description The comment recorded with the approval, truncated past 8000
-             *      characters.
-             */
-            comment?: string | null;
-            /**
-             * Format: int64
-             * @description The GitHub environment ID the approval applied to.
-             */
-            github_environment_id: number;
-            /**
-             * Format: int64
-             * @description The GitHub user ID of the person whose GitHub deployment approval
-             *      overrode the gate.
-             */
-            github_user_id: number;
-            /**
-             * @description That person's GitHub login as recorded with the approval, a display
-             *      label truncated past 128 characters.
-             */
-            github_user_login: string;
-        };
         PassProjection: {
             /** @description Symbolic configuration binding, not a historical model identity. */
             model_binding: string;
@@ -2603,8 +2322,6 @@ export interface components {
              */
             iteration: number;
         };
-        /** @enum {string} */
-        PermissionView: "PERMIT" | "BLOCK";
         PlanProjection: {
             /** @description Environment assessment bindings recorded in the plan. */
             assessments: components["schemas"]["AssessmentProjection"][];
@@ -2718,44 +2435,6 @@ export interface components {
             review_id?: string | null;
             /** @description The current gate projection, including a recorded bypass or supersession by a newer head. */
             status: components["schemas"]["GateStatus"];
-        };
-        /** @description Where one deferred question stands. */
-        QuestionState: "PENDING" | "RECORDED" | "UNBOUND" | "NOT_EXECUTED";
-        ReachGapView: {
-            /** @description `COVERAGE_INCOMPLETE`, `SOURCE_CAPABILITY_MISSING` or `BOUND_REACHED`. */
-            code: string;
-        };
-        ReachStepView: {
-            /**
-             * Format: uuid
-             * @description The World relation assertion behind this step.
-             */
-            assertion_id: string;
-            /**
-             * @description `OUT` when the step follows the relation from its subject, `IN` when
-             *      it follows it back to the subject.
-             */
-            direction: string;
-            /** @description The relation key, such as `proofline.relation.consumes_api`. */
-            relation: string;
-        };
-        ReachedEntityView: {
-            /**
-             * Format: uuid
-             * @description World's entity ID.
-             */
-            entity_id: string;
-            /** @description The entity's kind, such as `service` or `queue`. */
-            kind: string;
-            /**
-             * @description World's display label for the entity: environment evidence for
-             *      readers of this organization, never published to GitHub.
-             */
-            label: string;
-            /** @description The recorded relation assertions from the deployed root to the entity. */
-            path: components["schemas"]["ReachStepView"][];
-            /** @description World's registry type keys for the entity. */
-            type_keys: string[];
         };
         /** @description A recorded refresh decision, as the console shows it. */
         RefreshView: {
@@ -3067,8 +2746,6 @@ export interface components {
             findings: components["schemas"]["RoutingFindingView"][];
             /** @description Safe routing projection bound to this review's retained inputs. */
             plan: components["schemas"]["PlanProjection"];
-            /** @description Actual specialist selection and pass receipts for the applied workflow. */
-            specialist_execution?: components["schemas"]["SpecialistExecutionView"] | null;
             /** @constant */
             status: "SUPPORTED";
             /** @description Version of the validated routing plan. */
@@ -3144,6 +2821,11 @@ export interface components {
             pull_request_author_github_user_id?: number | null;
             /** @description Provider display metadata for the pull request author, not the rerun requester. */
             pull_request_author_login?: string | null;
+            /**
+             * @description The author's GitHub profile name, when known. Lead with it; the login
+             *      is the fallback. Display metadata, never identity.
+             */
+            pull_request_author_name?: string | null;
             /** @description The author's profile on the deployment's GitHub host. Absent when no author login is known. */
             pull_request_author_url?: string | null;
             /**
@@ -3196,32 +2878,6 @@ export interface components {
              *      or `UNKNOWN` for a trigger key this build does not recognise.
              */
             trigger_origin: string;
-        };
-        /** @description One member of a review's declared tree that World cited. */
-        ReviewedTreeCitationView: {
-            /**
-             * @description The member's content hash. Absent for a member a `REJECTED`
-             *      population refused, because such a population keeps no members.
-             */
-            content_sha256?: string | null;
-            /** @description The overlay World read the member from. */
-            overlay_digest: string;
-            /**
-             * @description The member's path in the repository at that revision. Repository
-             *      text, so it can hold bidirectional controls that reorder what the
-             *      reader sees.
-             */
-            path: components["schemas"]["UntrustedText"];
-            /**
-             * @description The population the member belongs to, such as
-             *      `WORKFLOW_DEFINITIONS`.
-             */
-            population_kind: string;
-            /**
-             * @description `PROPOSED_CODE_REVISION` (the reviewed commit) or
-             *      `BASE_CODE_REVISION` (its merge base).
-             */
-            role: string;
         };
         /**
          * @description The NDJSON row and CSV column contract. Repository names are display data;
@@ -3453,40 +3109,6 @@ export interface components {
              */
             run_number: number;
         };
-        SpecialistAssessmentExecution: {
-            /**
-             * Format: uuid
-             * @description The immutable assessment whose specialist execution is reported.
-             */
-            assessment_id: string;
-            /** @description Selected specialist passes and their retained execution outputs. */
-            passes: components["schemas"]["SpecialistPassExecution"][];
-        };
-        SpecialistExecutionView: {
-            /** @description The applied specialist roster per exact assessment execution. */
-            assessments: components["schemas"]["SpecialistAssessmentExecution"][];
-            /** @description False until the applied parent captures its specialist choices. */
-            selection_recorded: boolean;
-        };
-        /** @description A pass receipt's bounded operational facts, without its proposals or prose. */
-        SpecialistOutputProjection: {
-            /** @description Closed evidence-gap class, absent when the pass produced output. */
-            gap_kind?: string | null;
-            /** @description Verified digest of the retained output bytes. */
-            output_sha256: string;
-            /** @description `PRODUCED`, `UNAVAILABLE`, `INCOMPLETE` or `MALFORMED`. */
-            status: string;
-        };
-        SpecialistPassExecution: {
-            /** @description Exact selected paths from the validated captured change. */
-            files: string[];
-            /** @description Whether captured file facts required this pass. */
-            floor: boolean;
-            /** @description Closed registry key of the selected specialist. */
-            name: string;
-            /** @description Missing means selected, with no retained output. It never means success. */
-            output?: components["schemas"]["SpecialistOutputProjection"] | null;
-        };
         /** @enum {string} */
         SpendAccountKind: "DEPLOYMENT" | "TENANT_CREDENTIAL" | "UNATTRIBUTED";
         /** @description UTC daily debit totals using only the account and transport recorded at charge time. */
@@ -3654,27 +3276,6 @@ export interface components {
         };
         /** @enum {string} */
         SummaryRoute: "DETERMINISTIC_ONLY" | "SHORT" | "FULL";
-        /** @enum {string} */
-        TerraformPlanView: "TAKEN" | "NOT_DECLARED" | "NOT_PINNED" | "HEAD_DIFFERS" | "ADDRESSES_UNREPORTED";
-        /** @description The Terraform roots of one declared reach read. */
-        TerraformRootsView: {
-            /** @description The changed resource instance addresses taken as roots. */
-            addresses: string[];
-            /**
-             * Format: uint
-             * @description Changed addresses left out at World's limit of 100 roots per read.
-             */
-            omitted: number;
-            /**
-             * @description `TAKEN` when the plan pinned for the reviewed commit named the roots,
-             *      `NOT_DECLARED` when the environment captures no Terraform plan for this
-             *      review, `NOT_PINNED` when it declares one and none was pinned,
-             *      `HEAD_DIFFERS` when the pinned plan is for another commit, and
-             *      `ADDRESSES_UNREPORTED` when the pinned plan records no changed
-             *      addresses because it was pinned before World reported them.
-             */
-            plan: components["schemas"]["TerraformPlanView"];
-        };
         /** @enum {string} */
         ThreadObservationFreshness: "FRESH" | "STALE";
         /** @description A read of GitHub's thread state. `observed_at` is when Proofline read it. */

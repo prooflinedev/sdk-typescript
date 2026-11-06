@@ -1,4 +1,4 @@
-const VERSION = "2.0.0";
+const VERSION = "3.0.0";
 const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
 const MAX_RETRIES = 3;
 const MAX_RETRY_SECONDS = 60;
