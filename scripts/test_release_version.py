@@ -15,24 +15,34 @@ class ReleaseAdmission(unittest.TestCase):
     def test_ref_version_and_main_ancestry(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
+
             def git(*arguments: str) -> None:
                 subprocess.run(["git", *arguments], cwd=root, check=True, capture_output=True)
+
             git("init", "--quiet", "-b", "main")
             git("config", "user.name", "Fixture")
             git("config", "user.email", "fixture@example.com")
             git("remote", "add", "origin", str(root))
-            (root / 'package.json').write_text('{"version":"1.2.3"}\n')
+            (root / "package.json").write_text('{"version":"1.2.3"}\n')
             (root / "openapi.public.json").write_text(json.dumps({"info": {"version": "1.2.3"}}))
             git("add", ".")
             git("commit", "--quiet", "-m", "fixture")
-            for ref, admitted in (("refs/heads/main", True), ("refs/tags/v1.2.3", True),
-                                  ("refs/tags/v9.9.9", False), ("refs/heads/feature", False)):
+            for ref, admitted in (
+                ("refs/heads/main", True),
+                ("refs/tags/v1.2.3", True),
+                ("refs/tags/v9.9.9", False),
+                ("refs/heads/feature", False),
+            ):
                 with self.subTest(ref=ref):
                     output = root / "output"
                     output.unlink(missing_ok=True)
-                    result = subprocess.run([sys.executable, str(SCRIPT)], cwd=root,
+                    result = subprocess.run(
+                        [sys.executable, str(SCRIPT)],
+                        cwd=root,
                         env={**os.environ, "GITHUB_REF": ref, "GITHUB_OUTPUT": str(output)},
-                        capture_output=True, text=True)
+                        capture_output=True,
+                        text=True,
+                    )
                     self.assertEqual(result.returncode == 0, admitted, result.stderr)
                     if admitted:
                         self.assertEqual(output.read_text(), "version=1.2.3\n")
@@ -43,18 +53,26 @@ class ReleaseAdmission(unittest.TestCase):
                     (root / "openapi.public.json").write_text(json.dumps({"info": {"version": api}}))
                     output = root / "api-output"
                     output.unlink(missing_ok=True)
-                    result = subprocess.run([sys.executable, str(SCRIPT)], cwd=root,
+                    result = subprocess.run(
+                        [sys.executable, str(SCRIPT)],
+                        cwd=root,
                         env={**os.environ, "GITHUB_REF": "refs/heads/main", "GITHUB_OUTPUT": str(output)},
-                        capture_output=True, text=True)
+                        capture_output=True,
+                        text=True,
+                    )
                     self.assertEqual(result.returncode == 0, admitted, result.stderr)
             git("checkout", "--", "openapi.public.json")
             git("checkout", "--quiet", "-b", "feature")
             (root / "change").write_text("unmerged")
             git("add", ".")
             git("commit", "--quiet", "-m", "unmerged")
-            result = subprocess.run([sys.executable, str(SCRIPT)], cwd=root,
+            result = subprocess.run(
+                [sys.executable, str(SCRIPT)],
+                cwd=root,
                 env={**os.environ, "GITHUB_REF": "refs/tags/v1.2.3", "GITHUB_OUTPUT": str(root / "rejected")},
-                capture_output=True, text=True)
+                capture_output=True,
+                text=True,
+            )
             self.assertNotEqual(result.returncode, 0)
             self.assertFalse((root / "rejected").exists())
 
