@@ -60,6 +60,9 @@ jobs:
       contents: read
       id-token: write
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: package
@@ -68,4 +71,10 @@ jobs:
         with:
           node-version: '22.23.2'
       - run: npm install --global npm@12.2.0
-      - run: npm publish ./artifacts/*.tgz --access public --provenance --ignore-scripts
+      - id: select
+        run: |
+          state=$(node scripts/release-files.mjs select artifacts)
+          echo "state=$state" >> "$GITHUB_OUTPUT"
+      - if: steps.select.outputs.state == 'missing'
+        run: npm publish ./artifacts/*.tgz --access public --provenance --ignore-scripts
+      - run: node scripts/release-files.mjs verify artifacts

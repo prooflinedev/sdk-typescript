@@ -773,6 +773,15 @@ export interface components {
              */
             route?: components["schemas"]["SummaryRoute"] | null;
         };
+        /** @description One file World cited for a check's result. */
+        CheckFile: {
+            /** @description The repository-relative path. It is repository text. */
+            path: components["schemas"]["UntrustedText"];
+            /** @description The revision World read the file at. */
+            revision: components["schemas"]["CheckFileRevision"];
+        };
+        /** @description The revision a cited file was read at. */
+        CheckFileRevision: "PROPOSED_CODE_REVISION" | "BASE_CODE_REVISION";
         /**
          * @description World's lifecycle disclosure for the evaluator version that answered, as
          *      the receipt recorded it. A deployment gate counts only `GATING` results
@@ -1107,6 +1116,12 @@ export interface components {
              */
             evaluated_at?: string | null;
             /**
+             * @description The files World cited as evidence for this result, once each in
+             *      World's order, with the revision World read each at. Empty when World
+             *      cited no file, and on results recorded before World cited files.
+             */
+            files: components["schemas"]["CheckFile"][];
+            /**
              * @description The lifecycle of the evaluator version that answered. It says whether
              *      a deployment gate could count this result, not whether one did.
              */
@@ -1155,6 +1170,11 @@ export interface components {
              * @description When the code assessment ended. Null while it has not.
              */
             completed_at?: string | null;
+            /**
+             * @description Recorded check coverage counts and fixed cancellation causes, without source text.
+             *      Absent coverage does not establish that every check ran.
+             */
+            coverage_details?: string[];
             /**
              * @description The code-only findings the code assessment recorded, `SERIOUS` first.
              *      An empty list does not establish deployment safety.
@@ -3297,6 +3317,13 @@ export interface components {
             placement: string;
             /** @description Human override beside the original decision, when one was requested. */
             promotion?: components["schemas"]["FindingPromotionView"] | null;
+            /**
+             * Format: uuid
+             * @description The finding that represents this finding's publication group, when an
+             *      applied group publishes it in one comment with other findings. Every
+             *      member names the same finding, the representative included.
+             */
+            publication_group?: string | null;
             /** @description Recognized safe reason codes; unknown values are represented as `UNRECOGNIZED`. */
             reason_codes: string[];
             /** @description Rule that produced the recorded placement. */

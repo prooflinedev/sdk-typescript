@@ -1,9 +1,22 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { once } from "node:events";
+import {
+  cp,
+  mkdtemp,
+  readFile,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { createServer } from "node:http";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { inspect } from "node:util";
 import { ProoflineClient, ProoflineError, SecretToken } from "../dist/index.js";
+import metadata from "../package.json" with { type: "json" };
 
 const orgId = "00000000-0000-7000-8000-000000000001";
 const reviewId = "00000000-0000-7000-8000-000000000002";
@@ -213,7 +226,7 @@ test("all twelve generated methods use the authenticated token surface and prese
     fixture.calls.every(
       (call) =>
         call.authorization === `Bearer ${token}` &&
-        call.userAgent === "proofline-typescript/1.0.4" &&
+        call.userAgent === `proofline-typescript/${metadata.version}` &&
         call.contentType === undefined &&
         call.body === "",
     ),
@@ -543,6 +556,7 @@ test("waiting retains assessment gaps, unknown states and unresolved checks with
               name: "Environment reachability",
               outcome,
               lifecycle: "GATING",
+              files: [],
               detail: "evidence gap",
               unresolved_reason: "NEEDS_EVIDENCE",
             },
@@ -576,6 +590,7 @@ test("waiting retains assessment gaps, unknown states and unresolved checks with
             name: "Unknown evaluator",
             outcome: "READY",
             lifecycle: "FUTURE_LIFECYCLE",
+            files: [],
           },
         ],
       },
@@ -1166,4 +1181,70 @@ test("waiting for an agent session follows done without treating FINISHED as a f
       error instanceof ProoflineError &&
       error.type === "urn:proofline:sdk:invalid-response",
   );
+});
+
+test("a new public operation generates a callable typed client method", async (t) => {
+  const root = fileURLToPath(new URL("../", import.meta.url));
+  const work = await mkdtemp(join(tmpdir(), "sdk-operation-"));
+  t.after(() => rm(work, { recursive: true, force: true }));
+  for (const name of ["src", "generate.mjs", "package.json", "tsconfig.json"]) {
+    await cp(join(root, name), join(work, name), { recursive: true });
+  }
+  await symlink(
+    join(root, "node_modules"),
+    join(work, "node_modules"),
+    "junction",
+  );
+  const spec = JSON.parse(
+    await readFile(join(root, "openapi.public.json"), "utf8"),
+  );
+  spec.components.schemas.ExampleResult = {
+    type: "object",
+    required: ["answer"],
+    properties: { answer: { type: "string" } },
+  };
+  spec.paths["/api/example/{item}"] = {
+    parameters: [
+      { name: "item", in: "path", required: true, schema: { type: "integer" } },
+    ],
+    get: {
+      operationId: "read_example",
+      responses: {
+        200: {
+          description: "Example",
+          content: {
+            "application/json": {
+              schema: { $ref: "#/components/schemas/ExampleResult" },
+            },
+          },
+        },
+      },
+    },
+  };
+  await writeFile(join(work, "openapi.public.json"), JSON.stringify(spec));
+  execFileSync("pnpm", ["run", "generate"], { cwd: work });
+  await writeFile(
+    join(work, "src", "example-check.ts"),
+    `import type { ProoflineClient } from "./index.js";
+export async function answer(client: ProoflineClient): Promise<string> {
+  return (await client.readExample({ path: { item: 7 } })).answer;
+}`,
+  );
+  execFileSync("pnpm", ["run", "build"], { cwd: work });
+  const built = await import(
+    pathToFileURL(join(work, "dist", "index.js")).href
+  );
+  const example = await import(
+    pathToFileURL(join(work, "dist", "example-check.js")).href
+  );
+  const { baseUrl, calls } = await server(t, (_, res) =>
+    json(res, 200, { answer: "seven" }),
+  );
+  const client = new built.ProoflineClient({
+    baseUrl,
+    token: new built.SecretToken(token),
+  });
+  assert.equal(await example.answer(client), "seven");
+  assert.equal(calls[0].url, "/api/example/7");
+  assert.equal(calls[0].authorization, `Bearer ${token}`);
 });

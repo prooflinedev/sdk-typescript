@@ -6,8 +6,19 @@ const document = JSON.parse(
 const methods = [];
 const aliases = [];
 const ids = new Set();
+const httpMethods = new Set([
+  "get",
+  "put",
+  "post",
+  "delete",
+  "options",
+  "head",
+  "patch",
+  "trace",
+]);
 for (const [path, item] of Object.entries(document.paths)) {
   for (const [method, operation] of Object.entries(item)) {
+    if (!httpMethods.has(method)) continue;
     const id = operation.operationId;
     if (!/^[a-z][a-z0-9_]*$/.test(id) || ids.has(id)) {
       throw new Error(

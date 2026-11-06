@@ -1,9 +1,10 @@
 """Admit a release only at its package version and a commit on main."""
+
 import json
 import os
-from pathlib import Path
 import re
 import subprocess
+from pathlib import Path
 
 version = json.loads(Path("package.json").read_text())["version"]
 if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version):
