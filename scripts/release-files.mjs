@@ -19,10 +19,23 @@ if (
 const data = await readFile(join(directory, filename));
 const integrity = `sha512-${createHash("sha512").update(data).digest("base64")}`;
 const url = `https://registry.npmjs.org/${encodeURIComponent(name)}/${version}`;
+// The registry can serve a new version minutes after the publish returns while its
+// replicas catch up. Poll the version document for up to 20 minutes before failing.
+const propagationMs = 20 * 60 * 1000;
+const pollMs = 30 * 1000;
+
+// A server error, timeout or dropped connection means the registry does not serve the release yet.
+class Unavailable extends Error {}
 
 async function published() {
-  const response = await fetch(url, { signal: AbortSignal.timeout(30000) });
+  let response;
+  try {
+    response = await fetch(url, { signal: AbortSignal.timeout(30000) });
+  } catch (error) {
+    throw new Unavailable(`npm lookup failed: ${error.message}`);
+  }
   if (response.status === 404) return false;
+  if (response.status >= 500) throw new Unavailable(`npm lookup returned HTTP ${response.status}`);
   if (!response.ok) throw new Error(`npm lookup returned HTTP ${response.status}`);
   const metadata = await response.json();
   if (metadata.name !== name || metadata.version !== version || metadata.dist?.integrity !== integrity) {
@@ -55,8 +68,16 @@ if (mode === "select") {
     console.log("missing");
   }
 } else {
-  for (let attempt = 0; !(await published()); attempt++) {
-    if (attempt === 5) throw new Error("Published npm tarball is missing");
-    await setTimeout(5000);
+  const deadline = Date.now() + propagationMs;
+  for (;;) {
+    let problem = "Published npm tarball is missing";
+    try {
+      if (await published()) break;
+    } catch (error) {
+      if (!(error instanceof Unavailable)) throw error;
+      problem = error.message;
+    }
+    if (Date.now() >= deadline) throw new Error(problem);
+    await setTimeout(pollMs);
   }
 }
