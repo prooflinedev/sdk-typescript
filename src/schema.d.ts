@@ -1399,8 +1399,9 @@ export interface components {
             is_deep_review?: boolean;
             /**
              * @description `PULL_REQUEST`, `DEPLOYMENT`, `PATCH`, a review of local changes
-             *      sent as a patch, `COMMIT`, a review of pushed commits, or `FILES`,
-             *      complete selected files at one pushed commit.
+             *      sent as a patch, `COMMIT`, a review of pushed commits, `FILES`,
+             *      complete selected files at one pushed commit, or `MERGE_GROUP`, the
+             *      commit GitHub's merge queue built for a group of pull requests.
              */
             kind: string;
             /**
@@ -1415,6 +1416,12 @@ export interface components {
              *      Its captured review owner and GitHub bypass remain separate history.
              */
             merge_gate?: components["schemas"]["PullRequestMergeGate"] | null;
+            /**
+             * @description For a `MERGE_GROUP` review, the pull requests GitHub queued in the
+             *      group, in number order. Absent for every other kind, and until
+             *      Proofline has read the group's members.
+             */
+            merge_group_pull_request_numbers?: number[];
             /**
              * @description What Proofline still has open for the reviewed head, counted from the
              *      current finding decisions. Absent while the review is `PENDING` or
@@ -2794,10 +2801,17 @@ export interface components {
             id: string;
             /**
              * @description `PULL_REQUEST`, `DEPLOYMENT`, `PATCH`, a review of local changes
-             *      sent as a patch, `COMMIT`, a review of pushed commits, or `FILES`,
-             *      complete selected files at one pushed commit.
+             *      sent as a patch, `COMMIT`, a review of pushed commits, `FILES`,
+             *      complete selected files at one pushed commit, or `MERGE_GROUP`, the
+             *      commit GitHub's merge queue built for a group of pull requests.
              */
             kind: string;
+            /**
+             * @description For a `MERGE_GROUP` review, the pull requests GitHub queued in the
+             *      group, in number order. Absent for every other kind, and until
+             *      Proofline has read the group's members.
+             */
+            merge_group_pull_request_numbers?: number[];
             /** @description The review's stable public address: `rev_` followed by its identifier without hyphens. */
             public_key: string;
             /**

@@ -1755,7 +1755,7 @@
             "type": "boolean"
           },
           "kind": {
-            "description": "`PULL_REQUEST`, `DEPLOYMENT`, `PATCH`, a review of local changes\n sent as a patch, `COMMIT`, a review of pushed commits, or `FILES`,\n complete selected files at one pushed commit.",
+            "description": "`PULL_REQUEST`, `DEPLOYMENT`, `PATCH`, a review of local changes\n sent as a patch, `COMMIT`, a review of pushed commits, `FILES`,\n complete selected files at one pushed commit, or `MERGE_GROUP`, the\n commit GitHub's merge queue built for a group of pull requests.",
             "type": "string"
           },
           "local_reverifications": {
@@ -1775,6 +1775,14 @@
               }
             ],
             "description": "The deterministic policy for this exact repository/head, when opted in.\n Its captured review owner and GitHub bypass remain separate history."
+          },
+          "merge_group_pull_request_numbers": {
+            "description": "For a `MERGE_GROUP` review, the pull requests GitHub queued in the\n group, in number order. Absent for every other kind, and until\n Proofline has read the group's members.",
+            "items": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "type": "array"
           },
           "open_items": {
             "anyOf": [
@@ -4562,8 +4570,16 @@
             "type": "string"
           },
           "kind": {
-            "description": "`PULL_REQUEST`, `DEPLOYMENT`, `PATCH`, a review of local changes\n sent as a patch, `COMMIT`, a review of pushed commits, or `FILES`,\n complete selected files at one pushed commit.",
+            "description": "`PULL_REQUEST`, `DEPLOYMENT`, `PATCH`, a review of local changes\n sent as a patch, `COMMIT`, a review of pushed commits, `FILES`,\n complete selected files at one pushed commit, or `MERGE_GROUP`, the\n commit GitHub's merge queue built for a group of pull requests.",
             "type": "string"
+          },
+          "merge_group_pull_request_numbers": {
+            "description": "For a `MERGE_GROUP` review, the pull requests GitHub queued in the\n group, in number order. Absent for every other kind, and until\n Proofline has read the group's members.",
+            "items": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "type": "array"
           },
           "public_key": {
             "description": "The review's stable public address: `rev_` followed by its identifier without hyphens.",
@@ -5753,7 +5769,7 @@
   },
   "info": {
     "title": "Proofline Review API",
-    "version": "3.0.0"
+    "version": "3.1.0"
   },
   "openapi": "3.1.0",
   "paths": {
