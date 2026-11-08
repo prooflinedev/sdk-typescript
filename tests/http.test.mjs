@@ -1137,3 +1137,105 @@ export async function answer(client: ProoflineClient): Promise<string> {
   assert.equal(calls[0].url, "/api/example/7");
   assert.equal(calls[0].authorization, `Bearer ${token}`);
 });
+
+test("waiting reports each validated review response to onProgress", async (t) => {
+  const second = "00000000-0000-7000-8000-000000000006";
+  const responses = [
+    review("RUNNING", [
+      assessment("COMPLETED"),
+      { ...assessment("RUNNING"), id: second },
+    ]),
+    review("COMPLETED"),
+  ];
+  const fixture = await server(t, (_, response, calls) =>
+    json(response, 200, responses[Math.min(calls.length, 2) - 1]),
+  );
+  const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
+  const seen = [];
+  const result = await client.waitForReview(orgId, reviewId, {
+    timeoutMs: 10_000,
+    onProgress: async (progress) => {
+      await Promise.resolve();
+      seen.push(progress);
+    },
+  });
+  assert.equal(result.status, "COMPLETED");
+  assert.equal(fixture.calls.length, 2);
+  assert.deepEqual(
+    seen.map((progress) => ({
+      attempt: progress.attempt,
+      reviewStatus: progress.reviewStatus,
+      settledAssessments: progress.settledAssessments,
+      assessmentCount: progress.assessmentCount,
+      changed: progress.changed,
+    })),
+    [
+      {
+        attempt: 1,
+        reviewStatus: "RUNNING",
+        settledAssessments: 1,
+        assessmentCount: 2,
+        changed: true,
+      },
+      {
+        attempt: 2,
+        reviewStatus: "COMPLETED",
+        settledAssessments: 1,
+        assessmentCount: 1,
+        changed: true,
+      },
+    ],
+  );
+  assert.equal(seen[0].nextPollMs, 5_000);
+  assert.equal(seen[1].nextPollMs, null);
+  assert.ok(seen[1].elapsedMs >= seen[0].elapsedMs);
+  assert.equal(seen[1].review, result.review);
+});
+
+test("onProgress marks repeated responses unchanged, respects the deadline and propagates errors", async (t) => {
+  let body = review("RUNNING", [assessment("RUNNING")]);
+  const fixture = await server(t, (_, response) => json(response, 200, body));
+  const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
+  const seen = [];
+  const timedOut = await client.waitForReview(orgId, reviewId, {
+    timeoutMs: 80,
+    onProgress: (progress) => seen.push(progress),
+  });
+  assert.equal(timedOut.status, "TIMED_OUT");
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].changed, true);
+  assert.equal(seen[0].settledAssessments, 0);
+  assert.ok(seen[0].nextPollMs >= 0 && seen[0].nextPollMs <= 80);
+
+  // A malformed review never reaches the callback.
+  body = { ...review("RUNNING"), id: "someone-else" };
+  const malformed = [];
+  await assert.rejects(
+    client.waitForReview(orgId, reviewId, {
+      onProgress: (progress) => malformed.push(progress),
+    }),
+    (error) =>
+      error instanceof ProoflineError &&
+      error.type === "urn:proofline:sdk:invalid-response",
+  );
+  assert.equal(malformed.length, 0);
+
+  body = review("COMPLETED");
+  const failure = new Error("log sink unavailable");
+  await assert.rejects(
+    client.waitForReview(orgId, reviewId, {
+      onProgress: () => {
+        throw failure;
+      },
+    }),
+    (error) => error === failure,
+  );
+  const before = fixture.calls.length;
+  await assert.rejects(
+    client.waitForReview(orgId, reviewId, { onProgress: "log" }),
+    (error) =>
+      error instanceof TypeError &&
+      error.message === "onProgress must be a function",
+  );
+  assert.equal(fixture.calls.length, before);
+});
