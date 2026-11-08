@@ -55,8 +55,29 @@ export interface ReviewOutcome {
   reason: string | null;
 }
 
+export interface WaitProgress {
+  /** One-based count of review responses received during this wait. */
+  attempt: number;
+  elapsedMs: number;
+  /** The review status exactly as the server reported it. */
+  reviewStatus: string;
+  /** Assessments that are no longer PENDING or RUNNING. */
+  settledAssessments: number;
+  assessmentCount: number;
+  /** True on the first response and whenever the status or settled count moves. */
+  changed: boolean;
+  /** Delay before the next request, or null when this response ends the wait. */
+  nextPollMs: number | null;
+  review: Review;
+}
+
 export interface WaitOptions {
   timeoutMs?: number;
+  /**
+   * Called after each validated review response, before the wait sleeps or
+   * returns. Awaited, so its time counts toward timeoutMs; errors propagate.
+   */
+  onProgress?: (progress: WaitProgress) => void | Promise<void>;
 }
 
 export class ProoflineClient extends Operations {
@@ -146,10 +167,16 @@ export class ProoflineClient extends Operations {
     const timeout = options.timeoutMs ?? 20 * 60_000;
     if (!Number.isFinite(timeout) || timeout < 0)
       throw new TypeError("timeoutMs must be finite and nonnegative");
-    const deadline = performance.now() + timeout;
+    const { onProgress } = options;
+    if (onProgress !== undefined && typeof onProgress !== "function")
+      throw new TypeError("onProgress must be a function");
+    const started = performance.now();
+    const deadline = started + timeout;
     const url = this.#transport.reviewUrl(orgId, reviewId);
     let review: Review | null = null;
     let interval = 5_000;
+    let attempt = 0;
+    let previous: string | null = null;
     for (;;) {
       if (performance.now() >= deadline)
         return outcome(
@@ -191,6 +218,29 @@ export class ProoflineClient extends Operations {
       }
       validateReview(review, reviewId);
       const status = terminal(review);
+      if (onProgress) {
+        attempt += 1;
+        const nextPollMs =
+          status === null
+            ? Math.min(interval, Math.max(0, deadline - performance.now()))
+            : null;
+        const settledAssessments = review.assessments.filter(
+          (assessment) =>
+            assessment.status !== "PENDING" && assessment.status !== "RUNNING",
+        ).length;
+        const fingerprint = `${review.status}:${settledAssessments}:${review.assessment_count}`;
+        await onProgress({
+          attempt,
+          elapsedMs: performance.now() - started,
+          reviewStatus: review.status,
+          settledAssessments,
+          assessmentCount: review.assessment_count,
+          changed: fingerprint !== previous,
+          nextPollMs,
+          review,
+        });
+        previous = fingerprint;
+      }
       if (status !== null)
         return outcome(
           status,

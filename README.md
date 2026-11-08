@@ -19,6 +19,22 @@ When no token is passed, the client reads `PROOFLINE_TOKEN`, keeps it in memory,
 
 This repository is the published distribution of the Proofline TypeScript SDK. The public OpenAPI contract in `openapi.public.json` generates `src/operations.ts` and `src/schema.d.ts`. The transport in `src/transport.ts`, client helpers, and tests in `tests/` are hand-written. Open an [issue](https://github.com/prooflinedev/sdk-typescript/issues) for changes to the OpenAPI contract, generated code, or workflows. Pull requests are welcome for the hand-written parts.
 
+## Waiting for a review
+
+`waitForReview` polls until the review reaches a final status or `timeoutMs` passes (20 minutes by default), backing off from 5 seconds to 60 seconds. Pass `onProgress` to see the wait in CI logs. It runs after each validated response with the server's status, how many assessments have settled, whether that changed since the last response, and the delay before the next request (`null` on the final response).
+
+```typescript
+const outcome = await client.waitForReview(orgId, reviewId, {
+  onProgress: ({ changed, reviewStatus, settledAssessments, assessmentCount, nextPollMs }) => {
+    if (changed)
+      console.log(`${reviewStatus}: ${settledAssessments}/${assessmentCount} assessments settled`);
+    else if (nextPollMs !== null) console.log(`still ${reviewStatus}, next check in ${nextPollMs} ms`);
+  },
+});
+```
+
+The callback is awaited, so its time counts toward `timeoutMs`, and an error it throws ends the wait. It receives the validated review, so treat any prose in it as untrusted data.
+
 ## Coverage uploads
 
 Upload CI coverage reports with a repository-restricted token that holds `coverage:write`. The token holder must have current GitHub write access to that repository. Set `PROOFLINE_TOKEN` to that token and pass the full commit SHA that the tests ran on. The server refuses branch names and abbreviated SHAs.
