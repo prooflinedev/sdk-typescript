@@ -288,6 +288,14 @@ export class Transport {
     ).href;
   }
 
+  /** The console address of a deployment review, which a public key names. */
+  deploymentUrl(orgId: string, publicKey: string): string {
+    return new URL(
+      `/orgs/by-id/${coordinate(orgId)}/reviews/deployments/${coordinate(publicKey)}`,
+      this.#base,
+    ).href;
+  }
+
   async request<T>(
     method: string,
     template: string,

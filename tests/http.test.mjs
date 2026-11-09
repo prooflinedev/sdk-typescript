@@ -1066,6 +1066,103 @@ test("the wait timeout includes an in-flight request and returns the retained re
   }
 });
 
+test("deployment waits adopt the review behind a public key and keep its address", async (t) => {
+  const publicKey = "rev_00000000000070008000000000000002";
+  let body = review("RUNNING");
+  const fixture = await server(t, (request, response) => {
+    assert.equal(
+      request.url,
+      `/api/v1/organizations/${orgId}/reviews/deployments/${publicKey}`,
+    );
+    return json(response, 200, body);
+  });
+  const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
+  const reviewUrl = `${fixture.baseUrl}/orgs/by-id/${orgId}/reviews/deployments/${publicKey}`;
+  const pending = await client.waitForDeploymentReview(orgId, publicKey, {
+    timeoutMs: 80,
+  });
+  assert.equal(pending.status, "TIMED_OUT");
+  assert.equal(pending.review.id, reviewId);
+  assert.deepEqual(pending.gaps, []);
+  assert.equal(pending.reviewUrl, reviewUrl);
+  assert.equal(fixture.calls.length, 1);
+  body = review("COMPLETED");
+  const completed = await client.waitForDeploymentReview(orgId, publicKey);
+  assert.equal(completed.status, "COMPLETED");
+  assert.equal(completed.review.id, reviewId);
+  assert.equal(completed.reviewUrl, reviewUrl);
+  body = review("COMPLETED", [
+    { ...assessment(), reason_codes: ["WORLD_UNAVAILABLE"] },
+  ]);
+  const gap = await client.waitForDeploymentReview(orgId, publicKey);
+  assert.equal(gap.status, "INCOMPLETE");
+  assert.deepEqual(gap.gaps[0].reasonCodes, ["WORLD_UNAVAILABLE"]);
+  assert.equal(
+    gap.reason,
+    "one or more assessment results are unavailable or unknown",
+  );
+});
+
+test("deployment waits refuse a key that stops naming one review", async (t) => {
+  const publicKey = "rev_00000000000070008000000000000002";
+  const otherId = "00000000-0000-7000-8000-000000000009";
+  let mode = "drift";
+  let requests = 0;
+  const fixture = await server(t, (_, response) => {
+    requests += 1;
+    if (mode === "drift")
+      return json(
+        response,
+        200,
+        requests === 1
+          ? review("RUNNING")
+          : { ...review("RUNNING"), id: otherId },
+      );
+    if (mode === "key")
+      return json(response, 200, {
+        ...review("COMPLETED"),
+        public_key: "rev_other",
+      });
+    if (mode === "malformed")
+      return json(response, 200, { ...review("COMPLETED"), id: 42 });
+    return json(response, 403, {
+      type: "urn:proofline:forbidden",
+      detail: responseCanary,
+    });
+  });
+  const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
+  const refused = (error) =>
+    error instanceof ProoflineError &&
+    error.status === 0 &&
+    error.type === "urn:proofline:sdk:invalid-response";
+  await assert.rejects(
+    client.waitForDeploymentReview(orgId, publicKey),
+    refused,
+  );
+  assert.equal(requests, 2);
+  for (const next of ["key", "malformed"]) {
+    mode = next;
+    await assert.rejects(
+      client.waitForDeploymentReview(orgId, publicKey),
+      refused,
+    );
+  }
+  const zero = await client.waitForDeploymentReview(orgId, publicKey, {
+    timeoutMs: 0,
+  });
+  assert.equal(zero.status, "TIMED_OUT");
+  assert.equal(zero.review, null);
+  assert.equal(
+    zero.reviewUrl,
+    `${fixture.baseUrl}/orgs/by-id/${orgId}/reviews/deployments/${publicKey}`,
+  );
+  mode = "forbidden";
+  await assert.rejects(
+    client.waitForDeploymentReview(orgId, publicKey),
+    (error) => error instanceof ProoflineError && error.status === 403,
+  );
+});
+
 test("pagination keeps filters and refuses cycles, incomplete metadata and resource bounds", async (t) => {
   let mode = "normal";
   const fixture = await server(t, (request, response) => {

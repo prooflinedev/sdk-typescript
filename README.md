@@ -55,6 +55,12 @@ process.stdout.write(page.text);
 // Continue with query.cursor = page.nextCursor when it is not null.
 ```
 
+## Waiting on a review
+
+`waitForReview(orgId, reviewId, { timeoutMs })` polls until a review reaches a terminal status and returns the outcome, the retained review, and any assessment gaps. `waitForDeploymentReview(orgId, publicKey, { timeoutMs })` waits the same way for the review a deployment produced, addressed by its public key rather than a review id.
+
+A deployment names its review by key, so the first response supplies the identity: the SDK adopts that id and requires every later poll to keep both it and the public key. A key that starts resolving to another review fails with `ProoflineError` instead of returning a different deployment's result. Both waits return `TIMED_OUT` with the last observed review when the deadline expires, and neither retries a refusal.
+
 ## MCP organization selection
 
 With an MCP OAuth credential approved for several organizations, call `client.mcp.listOrganizations()` to discover its currently authorized targets. The `KnowledgeResult` retains `isError` and `structuredContent.data.organizations`; each organization entry contains `organization_id`, `github_login`, and `scopes`.
