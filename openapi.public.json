@@ -549,7 +549,7 @@
         "type": "string"
       },
       "CiFailureLine": {
-        "description": "One failed CI job as the Check states it.",
+        "description": "One failed CI job in the observation.",
         "properties": {
           "attribution": {
             "allOf": [
@@ -4263,7 +4263,7 @@
             "type": "integer"
           },
           "ci_failures": {
-            "description": "Failed CI jobs diagnosed on the reviewed head, the newest diagnosed\n attempt of each run, in diagnosis order. The Check states each one;\n none is a Proofline open item. Absent when no job was diagnosed.",
+            "description": "Failed CI jobs diagnosed on the reviewed head, the newest diagnosed\n attempt of each run, in diagnosis order. The pull-request Check counts\n them; none is a Proofline open item. Absent when no job was diagnosed.",
             "items": {
               "$ref": "#/components/schemas/CiFailureLine"
             },

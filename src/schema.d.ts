@@ -705,7 +705,7 @@ export interface components {
          * @enum {string}
          */
         CiFailureAttribution: "CAUSED_BY_CHANGE" | "PRE_EXISTING_ON_BASE" | "FLAKY_OR_INFRASTRUCTURE" | "ENVIRONMENT_STATE" | "UNKNOWN";
-        /** @description One failed CI job as the Check states it. */
+        /** @description One failed CI job in the observation. */
         CiFailureLine: {
             /**
              * @description The recorded cause: `CAUSED_BY_CHANGE`, `PRE_EXISTING_ON_BASE`,
@@ -2650,8 +2650,8 @@ export interface components {
             accepted_risk_count: number;
             /**
              * @description Failed CI jobs diagnosed on the reviewed head, the newest diagnosed
-             *      attempt of each run, in diagnosis order. The Check states each one;
-             *      none is a Proofline open item. Absent when no job was diagnosed.
+             *      attempt of each run, in diagnosis order. The pull-request Check counts
+             *      them; none is a Proofline open item. Absent when no job was diagnosed.
              */
             ci_failures?: components["schemas"]["CiFailureLine"][];
             /**
