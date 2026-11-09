@@ -6,7 +6,11 @@ export interface KnowledgeResult {
   structuredContent?: Record<string, unknown>;
   isError?: boolean;
 }
-export interface RepositoryKnowledge {
+/** Selects one authorized organization for this call only. */
+export interface McpTarget {
+  organization_id?: string;
+}
+export interface RepositoryKnowledge extends McpTarget {
   repository: string;
   commit?: string;
 }
@@ -38,6 +42,8 @@ export class McpTools {
   constructor(private readonly transport: Transport) {}
 
   protected async call(name: string, args: object): Promise<KnowledgeResult> {
+    // Bind the per-call target before protocol negotiation yields to the caller.
+    const callArguments = { ...args };
     const invoke = (
       body: object,
       phase: "initialize" | "notification" | "call",
@@ -85,7 +91,7 @@ export class McpTools {
           jsonrpc: "2.0",
           id: 2,
           method: "tools/call",
-          params: { name, arguments: args },
+          params: { name, arguments: callArguments },
         },
         "call",
       ),
@@ -105,5 +111,12 @@ export class McpTools {
     )
       throw refused();
     return result as unknown as KnowledgeResult;
+  }
+}
+
+/** Discover the organizations currently authorized for this MCP credential. */
+export class McpClient extends McpTools {
+  listOrganizations(): Promise<KnowledgeResult> {
+    return this.call("list_organizations", {});
   }
 }

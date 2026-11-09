@@ -55,6 +55,27 @@ process.stdout.write(page.text);
 // Continue with query.cursor = page.nextCursor when it is not null.
 ```
 
+## MCP organization selection
+
+With an MCP OAuth credential approved for several organizations, call `client.mcp.listOrganizations()` to discover its currently authorized targets. The `KnowledgeResult` retains `isError` and `structuredContent.data.organizations`; each organization entry contains `organization_id`, `github_login`, and `scopes`.
+
+Every `knowledge` and `fixes` helper accepts an optional organization UUID string. Object-taking methods accept `organization_id` in their argument object. Methods taking scalar arguments accept a final `McpTarget` options object:
+
+```typescript
+const organizations = await client.mcp.listOrganizations();
+if (organizations.isError) throw new Error("Organization discovery was refused.");
+console.log(organizations.structuredContent?.data);
+// Set organizationId to the UUID of the organization you intend to use.
+const context = await client.fixes.getFixContext(findingId, {
+  organization_id: organizationId,
+});
+const page = await client.knowledge.getWikiPage({
+  repository: "owner/name", page_key: "index", organization_id: organizationId,
+});
+```
+
+Selection applies only to that call, including concurrent calls on one client. A single-organization credential can omit it. An ambiguous omission retains the server's `ORGANIZATION_REQUIRED` tool refusal; a foreign or revoked target retains `NOT_AUTHORIZED` and `isError`. The SDK chooses no default and never retries a tool call. Discovery and targeting use MCP only; an MCP OAuth credential cannot call the REST API. Each organization's scopes and repository restrictions still apply.
+
 ## Knowledge and plans
 
 `client.knowledge` provides typed MCP methods: `listWikiPages`, `getWikiPage`, `askCodebase`, `getArchitectureDocument`, `getPlan`, `startPlanImplementation`, and `getPlanImplementation`.

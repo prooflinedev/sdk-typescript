@@ -507,6 +507,245 @@ test("reads honor bounded Retry-After and mutations make one attempt", async (t)
   }
 });
 
+const refusalBodies = [
+  ["empty", "", "application/json"],
+  ["HTML", `<html>${responseCanary} ${token}</html>`, "text/html"],
+  [
+    "malformed JSON",
+    `{"detail":"${responseCanary} ${token}`,
+    "application/json",
+  ],
+];
+
+test("reads retry empty, HTML and malformed JSON refusals before decoding success", async (t) => {
+  for (const status of [429, 503]) {
+    for (const [name, body, contentType] of refusalBodies) {
+      await t.test(`${status} ${name}`, async (t) => {
+        const fixture = await server(t, (_, response, calls) => {
+          if (calls.length === 1) {
+            response.writeHead(status, {
+              "Content-Type": contentType,
+              "Retry-After": "0",
+            });
+            return response.end(body);
+          }
+          json(response, 200, review());
+        });
+        const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
+        assert.equal(
+          (
+            await client.getReview({
+              path: { org_id: orgId, review_id: reviewId },
+            })
+          ).id,
+          reviewId,
+        );
+        assert.equal(fixture.calls.length, 2);
+      });
+    }
+  }
+});
+
+test("exhausted or refused retries retain status and fixed diagnostics without raw bodies", async (t) => {
+  const logs = [];
+  for (const method of ["log", "debug", "info", "warn", "error"]) {
+    t.mock.method(console, method, (...args) => logs.push(inspect(args)));
+  }
+  for (const status of [429, 503]) {
+    for (const [name, body, contentType] of refusalBodies) {
+      for (const header of ["0", "not-a-date", "61"]) {
+        await t.test(`${status} ${name} Retry-After ${header}`, async (t) => {
+          const fixture = await server(t, (_, response) => {
+            response.writeHead(status, {
+              "Content-Type": contentType,
+              "Retry-After": header,
+            });
+            response.end(body);
+          });
+          const client = new ProoflineClient({
+            baseUrl: fixture.baseUrl,
+            token,
+          });
+          await assert.rejects(
+            client.getReview({ path: { org_id: orgId, review_id: reviewId } }),
+            (error) => {
+              assert(error instanceof ProoflineError);
+              assert.equal(error.status, status);
+              assert.equal(error.type, "about:blank");
+              assert.equal(
+                error.detail,
+                "the server refused the request without a problem detail",
+              );
+              for (const diagnostic of [
+                inspect(error),
+                String(error),
+                JSON.stringify(error),
+              ]) {
+                assert(!diagnostic.includes(responseCanary));
+                assert(!diagnostic.includes(token));
+              }
+              return true;
+            },
+          );
+          assert.equal(fixture.calls.length, header === "0" ? 4 : 1);
+        });
+      }
+    }
+  }
+  assert(!logs.join("\n").includes(responseCanary));
+  assert(!logs.join("\n").includes(token));
+});
+
+test("a well-formed Problem keeps its fields after retry exhaustion", async (t) => {
+  const fixture = await server(t, (_, response) =>
+    json(
+      response,
+      503,
+      { type: "urn:proofline:unavailable", detail: responseCanary },
+      {
+        "Content-Type": "application/problem+json",
+        "Retry-After": "0",
+      },
+    ),
+  );
+  const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
+  await assert.rejects(
+    client.getReview({ path: { org_id: orgId, review_id: reviewId } }),
+    (error) =>
+      error instanceof ProoflineError &&
+      error.status === 503 &&
+      error.type === "urn:proofline:unavailable" &&
+      error.detail === responseCanary,
+  );
+  assert.equal(fixture.calls.length, 4);
+});
+
+test("non-JSON mutation and MCP POST refusals make one attempt", async (t) => {
+  for (const status of [429, 503]) {
+    for (const [name, body, contentType] of refusalBodies) {
+      await t.test(`${status} ${name}`, async (t) => {
+        const fixture = await server(t, (_, response) => {
+          response.writeHead(status, {
+            "Content-Type": contentType,
+            "Retry-After": "0",
+          });
+          response.end(body);
+        });
+        const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
+        for (const send of [
+          () =>
+            client.rerunReview({
+              path: { org_id: orgId, review_id: reviewId },
+            }),
+          () =>
+            client.knowledge.getWikiPage({
+              repository: "owner/name",
+              page_key: "index",
+            }),
+        ]) {
+          const before = fixture.calls.length;
+          await assert.rejects(
+            send(),
+            (error) =>
+              error instanceof ProoflineError &&
+              error.status === status &&
+              error.type === "about:blank",
+          );
+          assert.equal(fixture.calls.length - before, 1);
+          assert.equal(fixture.calls.at(-1).method, "POST");
+        }
+      });
+    }
+  }
+});
+
+test("refusal retries preserve response bounds and the caller deadline", async (t) => {
+  let mode = "oversized";
+  const fixture = await server(t, (_, response) => {
+    response.writeHead(503, {
+      "Content-Type": "text/html",
+      "Retry-After": mode === "deadline" ? "1" : "0",
+    });
+    if (mode === "oversized")
+      return response.end("x".repeat(8 * 1024 * 1024 + 1));
+    if (mode === "partial") return response.write("<html>");
+    response.end("<html>unavailable</html>");
+  });
+  const client = new ProoflineClient({
+    baseUrl: fixture.baseUrl,
+    token,
+    requestTimeoutMs: 5_000,
+  });
+  const boundedClient = new ProoflineClient({
+    baseUrl: fixture.baseUrl,
+    token,
+    requestTimeoutMs: 80,
+  });
+  for (const next of ["oversized", "partial"]) {
+    mode = next;
+    const before = fixture.calls.length;
+    const started = performance.now();
+    await assert.rejects(
+      (next === "partial" ? boundedClient : client).getReview({
+        path: { org_id: orgId, review_id: reviewId },
+      }),
+      (error) => {
+        assert(error instanceof ProoflineError);
+        assert.equal(error.status, 503);
+        assert.equal(error.type, "urn:proofline:sdk:invalid-response");
+        if (next === "oversized")
+          assert.equal(error.detail, "the response exceeds 8 MiB");
+        return true;
+      },
+    );
+    if (next === "partial") assert(performance.now() - started < 1000);
+    assert.equal(fixture.calls.length - before, 1);
+  }
+  mode = "deadline";
+  const before = fixture.calls.length;
+  const result = await client.waitForReview(orgId, reviewId, { timeoutMs: 80 });
+  assert.equal(result.status, "TIMED_OUT");
+  assert.equal(fixture.calls.length - before, 1);
+});
+
+test("export reads retry non-JSON refusals independently of the successful format", async (t) => {
+  for (const format of ["csv", "ndjson"]) {
+    await t.test(format, async (t) => {
+      const fixture = await server(t, (_, response, calls) => {
+        if (calls.length === 1) {
+          response.writeHead(503, {
+            "Content-Type": "text/html",
+            "Retry-After": "0",
+          });
+          return response.end(`<html>${responseCanary}</html>`);
+        }
+        response.writeHead(200, {
+          "Content-Type":
+            format === "csv" ? "text/csv" : "application/x-ndjson",
+          "X-Proofline-Export-Version": "1",
+          "X-Proofline-Export-Settled-Until": "2026-10-25T00:00:00Z",
+        });
+        response.end(
+          format === "csv"
+            ? "dataset_version,claim\r\n1,hello\r\n"
+            : '{"dataset_version":1,"claim":"hello"}\n',
+        );
+      });
+      const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
+      const page = await client.exportReviews({
+        path: { org_id: orgId, dataset: "findings" },
+        query: {
+          from: "2026-10-01T00:00:00Z",
+          to: "2026-10-25T00:00:00Z",
+          format,
+        },
+      });
+      assert.equal(page.rows[0].claim, "hello");
+      assert.equal(fixture.calls.length, 2);
+    });
+  }
+});
+
 test("waiting retains assessment gaps, unknown states and unresolved checks without inferring from findings", async (t) => {
   let body = review("INCOMPLETE", [
     {
@@ -522,7 +761,11 @@ test("waiting retains assessment gaps, unknown states and unresolved checks with
   const reviewUrl = `${fixture.baseUrl}/orgs/by-id/${orgId}/reviews/${reviewId}`;
   assert.equal(incomplete.status, "INCOMPLETE");
   assert.equal(incomplete.reviewUrl, reviewUrl);
-  assert.deepEqual(incomplete.gaps[0].reasonCodes, ["WORLD_UNAVAILABLE"]);
+  assert.deepEqual(incomplete.gaps[0].reasonCodes, [
+    "WORLD_UNAVAILABLE",
+    "EVIDENCE_UNAVAILABLE",
+    "pinned World evidence is unavailable",
+  ]);
   assert.equal(
     incomplete.gaps[0].releaseEvidenceGap,
     "pinned World evidence is unavailable",
@@ -654,7 +897,7 @@ test("CODE-only outcomes retain execution gaps while ENV assessments keep preced
       assert.equal(result.gaps[0].status, codeStatus);
       assert.equal(result.gaps[0].incompletenessKind, kind);
       assert.deepEqual(result.gaps[0].checks, []);
-      if (kind) assert.deepEqual(result.gaps[0].reasonCodes, []);
+      if (kind) assert.deepEqual(result.gaps[0].reasonCodes, [kind]);
     } else {
       assert.equal(expected, "COMPLETED");
     }
@@ -1136,4 +1379,348 @@ export async function answer(client: ProoflineClient): Promise<string> {
   assert.equal(await example.answer(client), "seven");
   assert.equal(calls[0].url, "/api/example/7");
   assert.equal(calls[0].authorization, `Bearer ${token}`);
+});
+
+test("shared review outcome contract", async (t) => {
+  const contract = JSON.parse(
+    await readFile(
+      new URL("./fixtures/review-outcomes.json", import.meta.url),
+      "utf8",
+    ),
+  );
+  const settled = contract.cases.find(
+    (item) => item.name === "review-completed",
+  ).review;
+  let body;
+  let pending;
+  let requests;
+  const fixture = await server(t, (_, response) => {
+    requests += 1;
+    json(response, 200, pending && requests > 1 ? settled : body);
+  });
+  const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
+  for (const item of contract.cases) {
+    body = item.review;
+    pending = item.outcome === null;
+    requests = 0;
+    const result = await client.waitForReview(orgId, body.id);
+    assert.equal(
+      result.status,
+      pending ? "COMPLETED" : item.outcome,
+      item.name,
+    );
+    assert.equal(requests, pending ? 2 : 1, item.name);
+    assert.deepEqual(
+      result.gaps.map((gap) => ({
+        assessment_id: gap.assessmentId || null,
+        reason_codes: gap.reasonCodes,
+      })),
+      item.gaps,
+      item.name,
+    );
+  }
+});
+
+test("MCP helpers isolate per-call organizations and preserve refusals", async (t) => {
+  const first = orgId;
+  const second = "00000000-0000-7000-8000-000000000006";
+  const foreign = "00000000-0000-7000-8000-000000000007";
+  const admitted = new Set([first, second]);
+  const observed = [];
+  let concurrent = false;
+  const pending = [];
+  const { baseUrl, calls } = await server(t, (request, response, seen) => {
+    assert.equal(request.url, "/mcp");
+    assert.equal(request.headers.authorization, `Bearer ${token}`);
+    const body = JSON.parse(seen.at(-1).body);
+    if (body.method === "initialize")
+      return json(response, 200, {
+        jsonrpc: "2.0",
+        id: 1,
+        result: { protocolVersion: "2025-11-25" },
+      });
+    assert.equal(request.headers["mcp-protocol-version"], "2025-11-25");
+    if (body.method === "notifications/initialized") {
+      response.writeHead(202);
+      return response.end();
+    }
+    const { name, arguments: args } = body.params;
+    observed.push(body.params);
+    if (name === "list_organizations") {
+      assert.deepEqual(args, {});
+      return json(response, 200, {
+        jsonrpc: "2.0",
+        id: 2,
+        result: {
+          content: [],
+          structuredContent: {
+            ok: true,
+            data: {
+              organizations: [...admitted].map((organization_id) => ({
+                organization_id,
+              })),
+            },
+          },
+        },
+      });
+    }
+    const code =
+      args.organization_id === undefined
+        ? "ORGANIZATION_REQUIRED"
+        : !admitted.has(args.organization_id)
+          ? "NOT_AUTHORIZED"
+          : undefined;
+    const payload = code
+      ? {
+          ok: false,
+          error: { code, message: "Target refused", retryable: false },
+        }
+      : { ok: true, data: { organization_id: args.organization_id } };
+    const reply = () =>
+      json(response, 200, {
+        jsonrpc: "2.0",
+        id: 2,
+        result: {
+          isError: code !== undefined,
+          content: [{ type: "text", text: JSON.stringify(payload) }],
+          structuredContent: payload,
+        },
+      });
+    if (concurrent) {
+      // Hold both responses until both tool calls have arrived.
+      pending.push(reply);
+      if (pending.length === 2) for (const send of pending.splice(0)) send();
+    } else reply();
+  });
+  const client = new ProoflineClient({
+    baseUrl,
+    token,
+    requestTimeoutMs: 5_000,
+  });
+  assert.deepEqual(
+    (await client.mcp.listOrganizations()).structuredContent.data.organizations,
+    [{ organization_id: first }, { organization_id: second }],
+  );
+  const cases = [
+    [
+      "list_wiki_pages",
+      (target) =>
+        client.knowledge.listWikiPages({
+          repository: "owner/name",
+          commit: "a".repeat(40),
+          ...target,
+        }),
+      { repository: "owner/name", commit: "a".repeat(40) },
+    ],
+    [
+      "get_wiki_page",
+      (target) =>
+        client.knowledge.getWikiPage({
+          repository: "owner/name",
+          page_key: "index",
+          ...target,
+        }),
+      { repository: "owner/name", page_key: "index" },
+    ],
+    [
+      "ask_codebase",
+      (target) =>
+        client.knowledge.askCodebase({
+          repository: "owner/name",
+          question: "How?",
+          ...target,
+        }),
+      { repository: "owner/name", question: "How?" },
+    ],
+    [
+      "get_architecture_document",
+      (target) => client.knowledge.getArchitectureDocument(reviewId, target),
+      { environment_id: reviewId },
+    ],
+    [
+      "get_plan",
+      (target) => client.knowledge.getPlan(reviewId, target),
+      { plan_id: reviewId },
+    ],
+    [
+      "start_plan_implementation",
+      (target) => client.knowledge.startPlanImplementation(reviewId, target),
+      { plan_id: reviewId },
+    ],
+    [
+      "get_plan_implementation",
+      (target) => client.knowledge.getPlanImplementation(reviewId, target),
+      { implementation_id: reviewId },
+    ],
+    [
+      "list_open_findings",
+      (target) => client.fixes.listOpenFindings("owner/name", 7, target),
+      { repository: "owner/name", pull_request_number: 7 },
+    ],
+    [
+      "get_fix_context",
+      (target) => client.fixes.getFixContext(findingId, target),
+      { finding_id: findingId },
+    ],
+    [
+      "request_reverification",
+      (target) =>
+        client.fixes.requestReverification({
+          review_id: reviewId,
+          finding_ids: [findingId],
+          commit_sha: "a".repeat(40),
+          note: "fixed",
+          ...target,
+        }),
+      {
+        review_id: reviewId,
+        finding_ids: [findingId],
+        commit_sha: "a".repeat(40),
+        note: "fixed",
+      },
+    ],
+    [
+      "get_reverification",
+      (target) => client.fixes.getReverification(reviewId, target),
+      { request_id: reviewId },
+    ],
+  ];
+  for (const [name, invoke, args] of cases) {
+    for (const organization_id of [first, second]) {
+      const answer = await invoke({ organization_id });
+      assert.equal(
+        answer.structuredContent.data.organization_id,
+        organization_id,
+      );
+      assert.deepEqual(observed.at(-1), {
+        name,
+        arguments: { ...args, organization_id },
+      });
+    }
+  }
+  concurrent = true;
+  const answers = await Promise.all([
+    client.knowledge.getPlan(reviewId, { organization_id: first }),
+    client.fixes.getFixContext(findingId, { organization_id: second }),
+  ]);
+  concurrent = false;
+  assert.deepEqual(
+    answers.map((answer) => answer.structuredContent.data.organization_id),
+    [first, second],
+  );
+  // Reusing an object for another target must not retarget a call that is
+  // still negotiating MCP. This also covers the object-taking mutation helper.
+  const args = {
+    review_id: reviewId,
+    finding_ids: [findingId],
+    commit_sha: "a".repeat(40),
+    organization_id: first,
+  };
+  concurrent = true;
+  const left = client.fixes.requestReverification(args);
+  args.organization_id = second;
+  const right = client.fixes.requestReverification(args);
+  const reused = await Promise.all([left, right]);
+  concurrent = false;
+  assert.deepEqual(
+    reused.map((answer) => answer.structuredContent.data.organization_id),
+    [first, second],
+  );
+  async function refused(organization_id, code) {
+    const before = observed.length;
+    const target = organization_id === undefined ? {} : { organization_id };
+    const answer = await client.fixes.requestReverification({
+      review_id: reviewId,
+      finding_ids: [findingId],
+      commit_sha: "a".repeat(40),
+      ...target,
+    });
+    assert.equal(answer.isError, true);
+    assert.equal(answer.structuredContent.error.code, code);
+    assert.deepEqual(
+      JSON.parse(answer.content[0].text),
+      answer.structuredContent,
+    );
+    assert.equal(observed.length, before + 1);
+    assert.equal(observed.at(-1).arguments.organization_id, organization_id);
+    assert.equal(
+      Object.hasOwn(observed.at(-1).arguments, "organization_id"),
+      organization_id !== undefined,
+    );
+  }
+  await refused(undefined, "ORGANIZATION_REQUIRED");
+  await refused(foreign, "NOT_AUTHORIZED");
+  admitted.delete(first);
+  await refused(first, "NOT_AUTHORIZED");
+  assert.deepEqual(
+    (await client.mcp.listOrganizations()).structuredContent.data.organizations,
+    [{ organization_id: second }],
+  );
+  assert.equal(
+    (await client.fixes.getFixContext(findingId, { organization_id: second }))
+      .structuredContent.data.organization_id,
+    second,
+  );
+  assert.equal(calls.length, observed.length * 3);
+});
+
+test("public MCP types accept existing and targeted calls", async (t) => {
+  // Check consumer code against the built public declarations, including
+  // object literals whose extra properties JavaScript HTTP tests cannot check.
+  const work = await mkdtemp(join(tmpdir(), "sdk-mcp-types-"));
+  t.after(() => rm(work, { recursive: true, force: true }));
+  const entry = fileURLToPath(new URL("../dist/index.js", import.meta.url));
+  const fixture = join(work, "consumer.mts");
+  await writeFile(
+    fixture,
+    `
+import type { ProoflineClient, KnowledgeResult, McpTarget, RepositoryKnowledge, ReverificationRequest } from ${JSON.stringify(entry)};
+export async function use(client: ProoflineClient): Promise<void> {
+  const target: McpTarget = { organization_id: "00000000-0000-7000-8000-000000000001" };
+  const repository: RepositoryKnowledge = { repository: "owner/name", commit: "a".repeat(40), ...target };
+  const verification: ReverificationRequest = { review_id: "review-id", finding_ids: ["finding-id"], commit_sha: "a".repeat(40), ...target };
+  const results: KnowledgeResult[] = await Promise.all([
+    client.mcp.listOrganizations(),
+    client.knowledge.listWikiPages({ repository: "owner/name" }),
+    client.knowledge.listWikiPages(repository),
+    client.knowledge.getWikiPage({ repository: "owner/name", page_key: "index" }),
+    client.knowledge.getWikiPage({ repository: "owner/name", page_key: "index", organization_id: "org-id" }),
+    client.knowledge.askCodebase({ repository: "owner/name", question: "How?" }),
+    client.knowledge.askCodebase({ repository: "owner/name", question: "How?", organization_id: "org-id" }),
+    client.knowledge.getArchitectureDocument("environment-id"),
+    client.knowledge.getArchitectureDocument("environment-id", target),
+    client.knowledge.getPlan("plan-id"),
+    client.knowledge.getPlan("plan-id", target),
+    client.knowledge.startPlanImplementation("plan-id"),
+    client.knowledge.startPlanImplementation("plan-id", target),
+    client.knowledge.getPlanImplementation("implementation-id"),
+    client.knowledge.getPlanImplementation("implementation-id", target),
+    client.fixes.listOpenFindings("owner/name", 7),
+    client.fixes.listOpenFindings("owner/name", 7, target),
+    client.fixes.getFixContext("finding-id"),
+    client.fixes.getFixContext("finding-id", target),
+    client.fixes.requestReverification({ review_id: "review-id", finding_ids: ["finding-id"], commit_sha: "a".repeat(40) }),
+    client.fixes.requestReverification(verification),
+    client.fixes.getReverification("request-id"),
+    client.fixes.getReverification("request-id", target),
+  ]);
+  console.log(results);
+}
+`,
+  );
+  execFileSync(process.execPath, [
+    fileURLToPath(
+      new URL("../node_modules/typescript/lib/tsc.js", import.meta.url),
+    ),
+    "--noEmit",
+    "--strict",
+    "--exactOptionalPropertyTypes",
+    "--target",
+    "ES2022",
+    "--module",
+    "NodeNext",
+    "--moduleResolution",
+    "NodeNext",
+    fixture,
+  ]);
 });

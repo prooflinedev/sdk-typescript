@@ -1,4 +1,4 @@
-const VERSION = "3.2.0";
+const VERSION = "3.3.0";
 const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
 const MAX_RETRIES = 3;
 const MAX_RETRY_SECONDS = 60;
@@ -139,6 +139,7 @@ async function decoded(
 ): Promise<unknown> {
   const reader = response.body?.getReader();
   if (!reader) {
+    if (!response.ok) return undefined;
     throw new ProoflineError(
       response.status,
       "urn:proofline:sdk:invalid-response",
@@ -169,9 +170,13 @@ async function decoded(
       offset += chunk.length;
     }
     const text = new TextDecoder("utf-8", { fatal: true }).decode(data);
-    return response.ok
-      ? decode(text, response.headers)
-      : (JSON.parse(text) as unknown);
+    if (response.ok) return decode(text, response.headers);
+    try {
+      return JSON.parse(text) as unknown;
+    } catch {
+      // A complete HTTP refusal need not carry a JSON Problem to be retryable.
+      return undefined;
+    }
   } catch (error) {
     if (error instanceof ProoflineError) throw error;
     if (response.ok && (signal.aborted || performance.now() >= deadline))

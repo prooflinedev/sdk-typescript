@@ -2,6 +2,10 @@ import { FixesClient } from "./fixes.js";
 
 export type { ReverificationRequest } from "./fixes.js";
 
+import { McpClient } from "./mcp.js";
+
+export type { McpTarget } from "./mcp.js";
+
 import { KnowledgeClient } from "./knowledge.js";
 
 export type { KnowledgeResult, RepositoryKnowledge } from "./knowledge.js";
@@ -34,6 +38,7 @@ export type ReviewStatus =
   | "TIMED_OUT";
 
 export interface AssessmentGaps {
+  /** Empty when no assessment identity is available for this gap. */
   assessmentId: string;
   status: string;
   incompletenessKind: string | null;
@@ -61,6 +66,7 @@ export interface WaitOptions {
 
 export class ProoflineClient extends Operations {
   readonly #transport: Transport;
+  readonly mcp: McpClient;
   readonly knowledge: KnowledgeClient;
   readonly fixes: FixesClient;
 
@@ -70,6 +76,7 @@ export class ProoflineClient extends Operations {
       transport.request(method, path, parameters, undefined, body),
     );
     this.#transport = transport;
+    this.mcp = new McpClient(transport);
     this.knowledge = new KnowledgeClient(transport);
     this.fixes = new FixesClient(transport);
   }
@@ -239,7 +246,9 @@ const KNOWN_ASSESSMENTS = new Set([
   "FAILED",
   "SUPERSEDED",
   "STOPPED",
+  "EXCLUDED",
 ]);
+const WITHHELD_MARKER = "[withheld: environment value]";
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -328,6 +337,7 @@ function checkGap(assessment: Assessment): boolean {
 
 function terminal(review: Review): ReviewStatus | null {
   if (review.status === "PENDING" || review.status === "RUNNING") return null;
+  if (review.status === "SUPERSEDED") return "STOPPED";
   if (
     review.status === "FAILED" ||
     review.status === "STOPPED" ||
@@ -379,7 +389,38 @@ function codeAssessment(review: Review): CodeAssessment | null {
       typeof code.incompleteness_kind !== "string")
   )
     return null;
+  if (
+    (typeof review.head_commit_sha === "string" &&
+      review.head_commit_sha.toLowerCase() !==
+        code.head_commit_sha.toLowerCase()) ||
+    (typeof review.base_commit_sha === "string" &&
+      review.base_commit_sha.toLowerCase() !==
+        code.base_commit_sha.toLowerCase()) ||
+    code.findings.some((finding) => finding.risk_domain === WITHHELD_MARKER)
+  )
+    return null;
   return code;
+}
+
+function assessmentReasons(assessment: Assessment): string[] {
+  const reasons = [...(assessment.reason_codes ?? [])];
+  if (assessment.incompleteness_kind)
+    reasons.push(assessment.incompleteness_kind);
+  if (assessment.release_evidence_gap)
+    reasons.push(assessment.release_evidence_gap);
+  if (checkGap(assessment))
+    reasons.push(
+      assessment.checks.receipt_recorded
+        ? "CHECKS_UNRESOLVED"
+        : "CHECK_RECEIPT_ABSENT",
+    );
+  if (!reasons.length)
+    reasons.push(
+      KNOWN_ASSESSMENTS.has(assessment.status)
+        ? "ASSESSMENT_RESULT_UNAVAILABLE"
+        : "UNKNOWN_ASSESSMENT_STATUS",
+    );
+  return reasons;
 }
 
 function outcome(
@@ -388,7 +429,7 @@ function outcome(
   review: Review | null,
   reason: string | null,
 ): ReviewOutcome {
-  const gaps = (review?.assessments ?? [])
+  const gaps: AssessmentGaps[] = (review?.assessments ?? [])
     .filter(
       (assessment) =>
         assessment.status !== "COMPLETED" ||
@@ -401,13 +442,7 @@ function outcome(
       assessmentId: assessment.id,
       status: assessment.status,
       incompletenessKind: assessment.incompleteness_kind ?? null,
-      reasonCodes: assessment.reason_codes?.length
-        ? assessment.reason_codes
-        : [
-            !KNOWN_ASSESSMENTS.has(assessment.status)
-              ? "UNKNOWN_ASSESSMENT_STATUS"
-              : "ASSESSMENT_RESULT_UNAVAILABLE",
-          ],
+      reasonCodes: assessmentReasons(assessment),
       releaseEvidenceGap: assessment.release_evidence_gap ?? null,
       checks: assessment.checks.families
         .filter(
@@ -429,8 +464,54 @@ function outcome(
       status: code.status,
       incompletenessKind: code.incompleteness_kind ?? null,
       reasonCodes: code.incompleteness_kind
-        ? []
+        ? [code.incompleteness_kind]
         : ["CODE_ASSESSMENT_STATE_UNAVAILABLE"],
+      releaseEvidenceGap: null,
+      checks: [],
+    });
+  }
+  if (
+    review &&
+    review.assessment_count === 0 &&
+    !review.assessments.length &&
+    !code
+  ) {
+    gaps.push({
+      assessmentId: "",
+      status: "UNKNOWN",
+      incompletenessKind: null,
+      reasonCodes: ["CODE_ASSESSMENT_UNAVAILABLE"],
+      releaseEvidenceGap: null,
+      checks: [],
+    });
+  }
+  if (review && review.assessment_count !== review.assessments.length) {
+    gaps.push({
+      assessmentId: "",
+      status: "UNKNOWN",
+      incompletenessKind: null,
+      reasonCodes: ["ASSESSMENT_HISTORY_UNAVAILABLE"],
+      releaseEvidenceGap: null,
+      checks: [],
+    });
+  }
+  if (
+    review &&
+    !gaps.length &&
+    ![
+      "PENDING",
+      "RUNNING",
+      "COMPLETED",
+      "FAILED",
+      "STOPPED",
+      "SUPERSEDED",
+    ].includes(review.status)
+  ) {
+    gaps.push({
+      assessmentId: "",
+      status: review.status,
+      incompletenessKind: null,
+      reasonCodes: ["REVIEW_STATE_UNAVAILABLE"],
       releaseEvidenceGap: null,
       checks: [],
     });
