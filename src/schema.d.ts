@@ -827,7 +827,7 @@ export interface components {
         CoverageUploadRequest: {
             /**
              * @description One to 50 reports, each LCOV, Cobertura XML, `JaCoCo` XML or a Go
-             *      cover profile, in a JSON body of at most 64 MiB.
+             *      cover profile, in a JSON body of at most 30 MiB.
              */
             reports: components["schemas"]["UploadedReport"][];
             /**

@@ -807,7 +807,7 @@
         "description": "The coverage reports a CI run produced for one commit.",
         "properties": {
           "reports": {
-            "description": "One to 50 reports, each LCOV, Cobertura XML, `JaCoCo` XML or a Go\n cover profile, in a JSON body of at most 64 MiB.",
+            "description": "One to 50 reports, each LCOV, Cobertura XML, `JaCoCo` XML or a Go\n cover profile, in a JSON body of at most 30 MiB.",
             "items": {
               "$ref": "#/components/schemas/UploadedReport"
             },
