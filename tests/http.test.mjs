@@ -16,6 +16,7 @@ import test from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { inspect } from "node:util";
 import { ProoflineClient, ProoflineError, SecretToken } from "../dist/index.js";
+import contract from "../openapi.public.json" with { type: "json" };
 import metadata from "../package.json" with { type: "json" };
 
 const orgId = "00000000-0000-7000-8000-000000000001";
@@ -337,6 +338,8 @@ test("coverage uploads preserve the tested commit, report text and server refusa
         assert(error instanceof ProoflineError);
         assert.equal(error.status, status);
         assert.equal(error.detail, responseCanary);
+        assert.equal(error.title, "coverage upload refused");
+        assert.equal(error.refusal, undefined);
         return true;
       },
     );
@@ -544,6 +547,174 @@ test("reads retry empty, HTML and malformed JSON refusals before decoding succes
       });
     }
   }
+});
+
+const refusalVariants = contract.components.schemas.RunNowRefusalView.oneOf.map(
+  (variant) => {
+    const view = { reason: variant.properties.reason.const };
+    for (const name of variant.required) {
+      if (name === "environment")
+        view.environment = {
+          id: assessmentId,
+          external_key: "production",
+          display_name: `${responseCanary} ${token}`,
+          status: "PENDING",
+        };
+      else if (name === "detail") view.detail = `configuration names ${token}`;
+    }
+    return view;
+  },
+);
+
+function refused(view) {
+  return {
+    title: "invalid request",
+    status: 400,
+    detail: `nothing was created for ${token}`,
+    repository_name: "api",
+    refusal: view,
+  };
+}
+
+const reviewRequests = [
+  (client, path) => client.requestReview({ path: { ...path, number: 12 } }),
+  (client, path) =>
+    client.requestPatchReview(
+      { path },
+      { base_commit_sha: "b".repeat(40), patch: "diff --git a/x b/x\n" },
+    ),
+  (client, path) =>
+    client.requestFileReview(
+      { path },
+      { commit_sha: "c".repeat(40), paths: ["src/app.ts"] },
+    ),
+  (client, path) =>
+    client.requestCommitReview(
+      { path },
+      { base_commit_sha: "b".repeat(40), head_commit_sha: "c".repeat(40) },
+    ),
+  (client, path) => client.requestScan({ path }, {}),
+];
+
+test("review requests return each documented refusal", async (t) => {
+  let body;
+  const fixture = await server(t, (_request, response) =>
+    json(response, 400, body, { "Content-Type": "application/problem+json" }),
+  );
+  const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
+  const path = { org_id: orgId, repo_id: repoId };
+  for (const view of refusalVariants) {
+    body = refused(view);
+    for (const request of reviewRequests) {
+      await assert.rejects(request(client, path), (error) => {
+        assert(error instanceof ProoflineError);
+        assert.equal(error.status, 400);
+        assert.equal(error.type, "about:blank");
+        assert.equal(error.title, "invalid request");
+        assert.equal(error.detail, "nothing was created for [redacted]");
+        assert.equal(error.repositoryName, "api");
+        assert.equal(error.refusal?.reason, view.reason);
+        assert(!JSON.stringify(error.refusal).includes(token));
+        if (view.environment)
+          assert.equal(
+            error.refusal.environment.display_name,
+            `${responseCanary} [redacted]`,
+          );
+        for (const diagnostic of [
+          inspect(error),
+          String(error),
+          JSON.stringify(error),
+        ]) {
+          assert(!diagnostic.includes(responseCanary));
+          assert(!diagnostic.includes(token));
+        }
+        return true;
+      });
+    }
+  }
+  assert.equal(
+    fixture.calls.length,
+    refusalVariants.length * reviewRequests.length,
+  );
+});
+
+test("a malformed refusal keeps the fixed SDK problem type", async (t) => {
+  const { detail: _, ...withoutDetail } = refused({
+    reason: "NO_LINKED_ENVIRONMENT",
+  });
+  const malformed = [
+    refused({ reason: "NOT_A_DOCUMENTED_REASON" }),
+    refused({ reason: "ENVIRONMENT_REVIEWS_OFF" }),
+    refused("NO_LINKED_ENVIRONMENT"),
+    { ...refused({ reason: "NO_LINKED_ENVIRONMENT" }), repository_name: 7 },
+    withoutDetail,
+    refused({
+      reason: "INVALID_DELIVERY_CONFIGURATION",
+      detail: 7,
+      environment: 7,
+    }),
+    refused({
+      reason: "INVALID_DELIVERY_CONFIGURATION",
+      detail: "d",
+      environment: 7,
+    }),
+    refused({
+      reason: "ENVIRONMENT_NOT_READY",
+      environment: {
+        id: assessmentId,
+        external_key: "production",
+        display_name: "Production",
+        status: "PENDING",
+      },
+      status_detail: 7,
+    }),
+  ];
+  let body;
+  const fixture = await server(t, (_request, response) =>
+    json(response, 400, body),
+  );
+  const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
+  for (const value of malformed) {
+    body = value;
+    await assert.rejects(
+      reviewRequests[3](client, { org_id: orgId, repo_id: repoId }),
+      (error) => {
+        assert(error instanceof ProoflineError);
+        assert.equal(error.status, 400);
+        assert.equal(error.type, "urn:proofline:sdk:invalid-response");
+        assert.equal(error.title, "invalid request");
+        assert.equal(error.refusal, undefined);
+        assert.equal(error.repositoryName, undefined);
+        assert(!error.detail.includes(token));
+        return true;
+      },
+    );
+  }
+});
+
+test("a problem without a detail keeps its status and title", async (t) => {
+  const fixture = await server(t, (_request, response) =>
+    json(
+      response,
+      500,
+      { title: "internal error", status: 500, detail: null },
+      { "Content-Type": "application/problem+json" },
+    ),
+  );
+  const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
+  await assert.rejects(
+    client.getReview({ path: { org_id: orgId, review_id: reviewId } }),
+    (error) => {
+      assert(error instanceof ProoflineError);
+      assert.equal(error.status, 500);
+      assert.equal(error.type, "about:blank");
+      assert.equal(error.title, "internal error");
+      assert(!error.detail.includes("without a problem detail"));
+      assert(error.detail.includes("internal error"));
+      return true;
+    },
+  );
+  assert.equal(fixture.calls.length, 1);
 });
 
 test("exhausted or refused retries retain status and fixed diagnostics without raw bodies", async (t) => {

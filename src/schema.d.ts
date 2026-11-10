@@ -3710,7 +3710,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["RunNowRefused"];
+                    "application/problem+json": components["schemas"]["RunNowRefused"];
                 };
             };
             /** @description An RFC 9457 problem; the HTTP status remains authoritative. */
@@ -3768,7 +3768,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["CoverageRefused"];
+                    "application/problem+json": components["schemas"]["CoverageRefused"];
                 };
             };
             /** @description An RFC 9457 problem; the HTTP status remains authoritative. */
@@ -3823,7 +3823,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["RunNowRefused"];
+                    "application/problem+json": components["schemas"]["RunNowRefused"];
                 };
             };
             /** @description An RFC 9457 problem; the HTTP status remains authoritative. */
@@ -3878,7 +3878,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["RunNowRefused"];
+                    "application/problem+json": components["schemas"]["RunNowRefused"];
                 };
             };
             /** @description An RFC 9457 problem; the HTTP status remains authoritative. */
@@ -3937,7 +3937,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["RunNowRefused"];
+                    "application/problem+json": components["schemas"]["RunNowRefused"];
                 };
             };
             /** @description An RFC 9457 problem; the HTTP status remains authoritative. */
@@ -4023,7 +4023,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["RunNowRefused"];
+                    "application/problem+json": components["schemas"]["RunNowRefused"];
                 };
             };
             /** @description An RFC 9457 problem; the HTTP status remains authoritative. */

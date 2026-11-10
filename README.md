@@ -19,6 +19,25 @@ When no token is passed, the client reads `PROOFLINE_TOKEN`, keeps it in memory,
 
 This repository is the published distribution of the Proofline TypeScript SDK. The public OpenAPI contract in `openapi.public.json` generates `src/operations.ts` and `src/schema.d.ts`. The transport in `src/transport.ts`, client helpers, and tests in `tests/` are hand-written. Open an [issue](https://github.com/prooflinedev/sdk-typescript/issues) for changes to the OpenAPI contract, generated code, or workflows. Pull requests are welcome for the hand-written parts.
 
+## Errors and refusals
+
+A refused request throws `ProoflineError` with the server problem's `status`, `type`, `title` and `detail`. When a review request creates nothing, the error also carries `refusal`, whose `reason` names the setting to change, such as `NO_LINKED_ENVIRONMENT` or `ENVIRONMENT_NOT_READY`, and `repositoryName`. A refusal that does not match the public contract keeps its status, `title` and `detail` with the type `urn:proofline:sdk:invalid-response` and no `refusal`. The token is redacted from every text field, and `String(error)`, `inspect(error)` and `JSON.stringify(error)` show only the status.
+
+```typescript
+import { ProoflineError } from "@proofline/sdk";
+
+try {
+  await client.requestReview({
+    path: { org_id: organizationId, repo_id: repositoryId, number: 12 },
+  });
+} catch (error) {
+  if (!(error instanceof ProoflineError) || error.refusal === undefined) throw error;
+  if (error.refusal.reason === "NO_LINKED_ENVIRONMENT")
+    console.error(`Link an environment to ${error.repositoryName}.`);
+  else console.error(error.detail);
+}
+```
+
 ## Coverage uploads
 
 Upload CI coverage reports with a repository-restricted token that holds `coverage:write`. The token holder must have current GitHub write access to that repository. Set `PROOFLINE_TOKEN` to that token and pass the full commit SHA that the tests ran on. The server refuses branch names and abbreviated SHAs.

@@ -1,8 +1,20 @@
-const VERSION = "4.0.0";
+import type { components } from "./schema.js";
+
+const VERSION = "5.0.0";
 const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
 const MAX_RETRIES = 3;
 const MAX_RETRY_SECONDS = 60;
 const inspect = Symbol.for("nodejs.util.inspect.custom");
+const secrets = new WeakMap<SecretToken, string>();
+
+/** Why a review request created nothing; `reason` names the setting to change. */
+export type RunNowRefusal = components["schemas"]["RunNowRefusalView"];
+
+export interface ProblemFields {
+  title?: string;
+  refusal?: RunNowRefusal;
+  repositoryName?: string;
+}
 
 export class SecretToken {
   readonly #value: string;
@@ -20,6 +32,7 @@ export class SecretToken {
       );
     }
     this.#value = value;
+    secrets.set(this, value);
   }
 
   apply(headers: Headers): void {
@@ -42,16 +55,19 @@ export class SecretToken {
 export class ProoflineError extends Error {
   readonly #problemType: string;
   readonly #detail: string;
+  readonly #fields: ProblemFields;
 
   constructor(
     readonly status: number,
     type: string,
     detail: string,
+    fields: ProblemFields = {},
   ) {
     super(`Proofline request failed with status ${status}`);
     this.name = "ProoflineError";
     this.#problemType = type;
     this.#detail = detail;
+    this.#fields = fields;
   }
 
   get type(): string {
@@ -60,6 +76,21 @@ export class ProoflineError extends Error {
 
   get detail(): string {
     return this.#detail;
+  }
+
+  /** The server's problem class, such as `invalid request`. */
+  get title(): string | undefined {
+    return this.#fields.title;
+  }
+
+  /** The typed refusal of a review request that created nothing. */
+  get refusal(): RunNowRefusal | undefined {
+    return this.#fields.refusal;
+  }
+
+  /** The refused repository's name within its owner. */
+  get repositoryName(): string | undefined {
+    return this.#fields.repositoryName;
   }
 
   toJSON(): { status: number } {
@@ -199,18 +230,108 @@ async function decoded(
   }
 }
 
-function problem(status: number, value: unknown): ProoflineError {
-  const body =
-    value !== null && typeof value === "object"
-      ? (value as Record<string, unknown>)
-      : {};
-  return new ProoflineError(
-    status,
-    typeof body.type === "string" ? body.type : "about:blank",
+type Body = Record<string, unknown>;
+
+function record(value: unknown): value is Body {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function redacted(value: unknown, secret: string): unknown {
+  if (typeof value === "string")
+    return secret ? value.replaceAll(secret, "[redacted]") : value;
+  if (Array.isArray(value)) return value.map((item) => redacted(item, secret));
+  if (record(value))
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [key, redacted(item, secret)]),
+    );
+  return value;
+}
+
+function environment(value: unknown): boolean {
+  return (
+    record(value) &&
+    ["id", "external_key", "display_name", "status"].every(
+      (key) => typeof value[key] === "string",
+    )
+  );
+}
+
+type Shape = (view: Body) => boolean;
+const always: Shape = () => true;
+const linked: Shape = (view) => environment(view.environment);
+const explained: Shape = (view) => typeof view.detail === "string";
+// Keyed by every documented reason, so a contract change fails the type check.
+const refusalShapes = {
+  TRIGGER_DISABLED: always,
+  REPOSITORY_DISABLED: always,
+  NO_LINKED_ENVIRONMENT: always,
+  ENVIRONMENT_REVIEWS_OFF: linked,
+  ENVIRONMENT_NOT_READY: (view) =>
+    linked(view) &&
+    (view.status_detail === undefined ||
+      view.status_detail === null ||
+      typeof view.status_detail === "string"),
+  ENVIRONMENT_EVIDENCE_UNAVAILABLE: linked,
+  INVALID_DELIVERY_CONFIGURATION: (view) =>
+    explained(view) &&
+    (view.environment === undefined ||
+      view.environment === null ||
+      environment(view.environment)),
+  PULL_REQUEST_UNKNOWN: always,
+  AUTHOR_HAS_NO_SEAT: always,
+  PULL_REQUEST_CLOSED: always,
+} satisfies Record<RunNowRefusal["reason"], Shape>;
+
+function refusal(value: unknown): RunNowRefusal | undefined {
+  if (!record(value) || typeof value.reason !== "string") return undefined;
+  const shape = Object.hasOwn(refusalShapes, value.reason)
+    ? refusalShapes[value.reason as RunNowRefusal["reason"]]
+    : undefined;
+  return shape?.(value) ? (value as RunNowRefusal) : undefined;
+}
+
+function problem(
+  status: number,
+  value: unknown,
+  token: SecretToken,
+): ProoflineError {
+  if (!record(value))
+    return new ProoflineError(
+      status,
+      "about:blank",
+      "the server refused the request without a problem detail",
+    );
+  const body = redacted(value, secrets.get(token) ?? "") as Body;
+  const type = typeof body.type === "string" ? body.type : "about:blank";
+  const title = typeof body.title === "string" ? body.title : undefined;
+  const detail =
     typeof body.detail === "string"
       ? body.detail
-      : "the server refused the request without a problem detail",
-  );
+      : title === undefined
+        ? "the server refused the request without a problem detail"
+        : // Logged internal errors omit detail; the problem itself still arrived.
+          `the server returned the problem "${title}" without a detail`;
+  const fields = title === undefined ? {} : { title };
+  if (!("refusal" in body))
+    return new ProoflineError(status, type, detail, fields);
+  const view = refusal(body.refusal);
+  if (
+    view === undefined ||
+    typeof body.repository_name !== "string" ||
+    typeof body.detail !== "string" ||
+    title === undefined
+  )
+    return new ProoflineError(
+      status,
+      "urn:proofline:sdk:invalid-response",
+      detail,
+      fields,
+    );
+  return new ProoflineError(status, type, detail, {
+    title,
+    refusal: view,
+    repositoryName: body.repository_name,
+  });
 }
 
 function retryDelay(
@@ -390,7 +511,7 @@ export class Transport {
         decode,
       );
       if (response.ok) return value as T;
-      const error = problem(response.status, value);
+      const error = problem(response.status, value, this.#token);
       const delay = retryDelay(response.headers.get("Retry-After"), attempt);
       if (
         method !== "GET" ||

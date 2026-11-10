@@ -24,7 +24,11 @@ import { type ClientOptions, sleep, Transport } from "./transport.js";
 
 export type * from "./operations.js";
 export type { components, operations, paths } from "./schema.js";
-export type { ClientOptions } from "./transport.js";
+export type {
+  ClientOptions,
+  ProblemFields,
+  RunNowRefusal,
+} from "./transport.js";
 export { ProoflineError, SecretToken } from "./transport.js";
 
 export type Review = components["schemas"]["CustomerReviewDetail"];
