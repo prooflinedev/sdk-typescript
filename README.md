@@ -19,6 +19,39 @@ When no token is passed, the client reads `PROOFLINE_TOKEN`, keeps it in memory,
 
 This repository is the published distribution of the Proofline TypeScript SDK. The public OpenAPI contract in `openapi.public.json` generates `src/operations.ts` and `src/schema.d.ts`. The transport in `src/transport.ts`, client helpers, and tests in `tests/` are hand-written. Open an [issue](https://github.com/prooflinedev/sdk-typescript/issues) for changes to the OpenAPI contract, generated code, or workflows. Pull requests are welcome for the hand-written parts.
 
+## Transport options
+
+`ClientOptions` also accepts `fetch`, `maxRetries`, and `hooks`.
+
+- `fetch` replaces the global `fetch` for every request. Node's built-in `fetch` ignores `HTTPS_PROXY`, so CI runners behind a corporate proxy can pass one that uses a proxy agent. Tests can pass a stub. The client still sets the token, timeout, and redirect policy, and a thrown error becomes a `urn:proofline:sdk:transport` error without the original message.
+- `maxRetries` sets how many times a read refused with 429 or 503 is retried, from 0 to 10. The default is 3. Mutations never retry.
+- `hooks.onRequest`, `hooks.onResponse`, and `hooks.onRetry` receive the method, URL, and attempt number, plus the status, duration, or retry delay. They never receive headers or the token. Hooks are observers: an error or rejected promise from a hook does not change the request outcome.
+
+```typescript
+import { ProxyAgent, fetch as proxyFetch } from "undici";
+
+const dispatcher = new ProxyAgent(process.env.HTTPS_PROXY!);
+const client = new ProoflineClient({
+  baseUrl: "https://proofline.sh",
+  fetch: (url, init) => proxyFetch(url, { ...init, dispatcher }),
+  maxRetries: 5,
+  hooks: {
+    onRetry: ({ url, status, delayMs }) =>
+      console.warn(`Proofline ${status} on ${url}; retrying in ${delayMs} ms`),
+  },
+});
+```
+
+`waitForReview` accepts an `AbortSignal` to stop waiting, for example when a CI job is cancelled. The promise rejects with `signal.reason`, whether the client is between polls or has a request in flight.
+
+```typescript
+const controller = new AbortController();
+process.once("SIGTERM", () => controller.abort());
+const outcome = await client.waitForReview(orgId, reviewId, {
+  signal: controller.signal,
+});
+```
+
 ## Coverage uploads
 
 Upload CI coverage reports with a repository-restricted token that holds `coverage:write`. The token holder must have current GitHub write access to that repository. Set `PROOFLINE_TOKEN` to that token and pass the full commit SHA that the tests ran on. The server refuses branch names and abbreviated SHAs.
