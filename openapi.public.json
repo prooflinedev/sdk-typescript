@@ -4942,8 +4942,7 @@
         "description": "Whether an explicit request may reuse a settled review of the live head.",
         "enum": [
           "EXISTING_OR_NEW",
-          "FULL",
-          "EXTENDED"
+          "FULL"
         ],
         "type": "string"
       },
@@ -5111,36 +5110,6 @@
               "reason"
             ],
             "type": "object"
-          },
-          {
-            "description": "Deep review policy, funding or worker availability prevents admission.",
-            "properties": {
-              "detail": {
-                "type": "string"
-              },
-              "reason": {
-                "const": "DEEP_REVIEW_UNAVAILABLE",
-                "type": "string"
-              }
-            },
-            "required": [
-              "reason",
-              "detail"
-            ],
-            "type": "object"
-          },
-          {
-            "description": "The existing review already retains a different focus.",
-            "properties": {
-              "reason": {
-                "const": "DEEP_REVIEW_FOCUS_CONFLICT",
-                "type": "string"
-              }
-            },
-            "required": [
-              "reason"
-            ],
-            "type": "object"
           }
         ]
       },
@@ -5188,20 +5157,13 @@
         "additionalProperties": false,
         "description": "An empty body keeps the run-now behavior existing clients request.",
         "properties": {
-          "focus_text": {
-            "description": "Optional investigation focus for EXTENDED, trimmed and frozen at admission.\n Limited to 500 UTF-16 code units.",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
           "mode": {
             "allOf": [
               {
                 "$ref": "#/components/schemas/RunNowMode"
               }
             ],
-            "description": "`EXISTING_OR_NEW`, the default, returns any review that already owns the live head.\n `FULL` returns a pending or running review of that head or starts a new one.\n `EXTENDED` admits one funded Deep Review for that head, with optional focus."
+            "description": "`EXISTING_OR_NEW`, the default, returns any review that already owns the live head.\n `FULL` returns a pending or running review of that head or starts a new one."
           }
         },
         "type": "object"
@@ -5831,7 +5793,7 @@
   },
   "info": {
     "title": "Proofline Review API",
-    "version": "3.3.0"
+    "version": "4.0.0"
   },
   "openapi": "3.1.0",
   "paths": {

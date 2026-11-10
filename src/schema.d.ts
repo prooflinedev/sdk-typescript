@@ -3027,7 +3027,7 @@ export interface components {
          * @description Whether an explicit request may reuse a settled review of the live head.
          * @enum {string}
          */
-        RunNowMode: "EXISTING_OR_NEW" | "FULL" | "EXTENDED";
+        RunNowMode: "EXISTING_OR_NEW" | "FULL";
         /**
          * @description Why a run-now request created nothing, each reason with what the page
          *      needs to link the setting to change.
@@ -3068,13 +3068,6 @@ export interface components {
         } | {
             /** @constant */
             reason: "PULL_REQUEST_CLOSED";
-        } | {
-            detail: string;
-            /** @constant */
-            reason: "DEEP_REVIEW_UNAVAILABLE";
-        } | {
-            /** @constant */
-            reason: "DEEP_REVIEW_FOCUS_CONFLICT";
         };
         /**
          * @description A run-now request that created nothing, as the 400 it is answered with.
@@ -3107,14 +3100,8 @@ export interface components {
         /** @description An empty body keeps the run-now behavior existing clients request. */
         RunNowRequest: {
             /**
-             * @description Optional investigation focus for EXTENDED, trimmed and frozen at admission.
-             *      Limited to 500 UTF-16 code units.
-             */
-            focus_text?: string | null;
-            /**
              * @description `EXISTING_OR_NEW`, the default, returns any review that already owns the live head.
              *      `FULL` returns a pending or running review of that head or starts a new one.
-             *      `EXTENDED` admits one funded Deep Review for that head, with optional focus.
              */
             mode?: components["schemas"]["RunNowMode"];
         };
