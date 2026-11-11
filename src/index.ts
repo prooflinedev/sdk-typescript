@@ -64,6 +64,23 @@ export interface ReviewOutcome {
   reason: string | null;
 }
 
+/** A severity threshold, as `proofline ci review --fail-on` takes it. */
+export type SeverityThreshold = "WARNING" | "SERIOUS";
+
+/**
+ * How a review measures against a threshold. The CLI exits with 3 for
+ * `REACHED`, 0 for `NOT_REACHED`, 2 for `NOT_COMPLETE` and 4 for `UNAVAILABLE`.
+ */
+export type GateResult =
+  | "REACHED"
+  | "NOT_REACHED"
+  | "NOT_COMPLETE"
+  | "UNAVAILABLE";
+
+export interface GateOptions {
+  failOn: SeverityThreshold;
+}
+
 export interface WaitOptions {
   timeoutMs?: number;
 }
@@ -375,6 +392,11 @@ function codeAssessment(review: Review): CodeAssessment | null {
   // A CODE result cannot replace a missing ENV result or its check receipts.
   if (review.assessment_count !== 0 || review.assessments.length !== 0)
     return null;
+  return recordedCode(review);
+}
+
+/** The CODE record of this review's own commits with published findings. */
+function recordedCode(review: Review): CodeAssessment | null {
   const code = review.code_assessment;
   if (
     !isObject(code) ||
@@ -521,4 +543,68 @@ function outcome(
     });
   }
   return { status, reviewUrl, review, gaps, reason };
+}
+
+// Least severe first.
+const SEVERITIES: readonly string[] = ["WARNING", "SERIOUS"];
+
+/**
+ * Measures a review against a severity threshold with the rules of
+ * `proofline ci review --fail-on`.
+ *
+ * Completeness decides first: an incomplete, failed or stopped review is
+ * `NOT_COMPLETE` whatever it found, and a wait that timed out is
+ * `UNAVAILABLE`. A completed review is `REACHED` when the server counts an open
+ * finding at or above the threshold, or when a complete CODE assessment of the
+ * review's own commits holds an unresolved finding at or above it. Dismissed
+ * findings and unexpired risk acceptances are not open. A severity this SDK
+ * does not know reaches every threshold. Without valid open-finding counts the
+ * threshold cannot be measured, which is `UNAVAILABLE` and never `NOT_REACHED`.
+ */
+export function gateReview(
+  result: ReviewOutcome,
+  options: GateOptions,
+): GateResult {
+  const failOn = options?.failOn;
+  if (!SEVERITIES.includes(failOn))
+    throw new TypeError("failOn must be WARNING or SERIOUS");
+  if (result.status === "TIMED_OUT") return "UNAVAILABLE";
+  if (result.status !== "COMPLETED") return "NOT_COMPLETE";
+  const review = result.review;
+  const counts: unknown = review?.open_items;
+  if (
+    !review ||
+    !isObject(counts) ||
+    !isCount(counts.open_findings) ||
+    !isCount(counts.serious_findings)
+  )
+    return "UNAVAILABLE";
+  if (
+    (failOn === "SERIOUS" ? counts.serious_findings : counts.open_findings) > 0
+  )
+    return "REACHED";
+  // CODE findings have no recorded decisions, so their lifecycle and severity
+  // decide. A partial CODE assessment's findings are not its whole result.
+  const code = recordedCode(review);
+  if (
+    code?.status === "COMPLETED" &&
+    !code.incompleteness_kind &&
+    code.findings.some(
+      (finding) =>
+        finding.lifecycle_state !== "RESOLVED" &&
+        reaches(finding.severity, failOn),
+    )
+  )
+    return "REACHED";
+  return "NOT_REACHED";
+}
+
+function isCount(value: unknown): value is number {
+  return Number.isSafeInteger(value) && Number(value) >= 0;
+}
+
+function reaches(severity: unknown, threshold: SeverityThreshold): boolean {
+  // An unknown severity, which a newer server can send, is never below one.
+  const index = SEVERITIES.indexOf(String(severity));
+  return index < 0 || index >= SEVERITIES.indexOf(threshold);
 }
