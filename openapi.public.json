@@ -1806,6 +1806,17 @@
             ],
             "description": "Dated PR counts with head, evaluated-scope and bounded thread proof.\n Absent when that observation is unavailable; scalar counts remain separate."
           },
+          "provider_wait": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProviderWait"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What holds the review now: GitHub's rate limit, and when it resets.\n Null unless one of the review's runs waits for it, and once the run\n continues."
+          },
           "public_key": {
             "description": "The review's stable public address: `rev_` followed by its identifier without hyphens.",
             "type": "string"
@@ -2218,7 +2229,9 @@
           "DEPLOYMENT",
           "PATCH",
           "COMMIT",
-          "FILES"
+          "FILES",
+          "MERGE_GROUP",
+          "REVISION_SCAN"
         ],
         "type": "string"
       },
@@ -3815,6 +3828,36 @@
           }
         ]
       },
+      "ProviderWait": {
+        "description": "A provider wait that holds the review now.",
+        "properties": {
+          "reason": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ProviderWaitReason"
+              }
+            ],
+            "description": "`GITHUB_RATE_LIMIT`: GitHub's rate limit for the organization's App\n installation is reached, and the review continues after it resets."
+          },
+          "until": {
+            "description": "When the wait ends: the reset GitHub named, or, when it named none,\n when the run is due again.",
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason",
+          "until"
+        ],
+        "type": "object"
+      },
+      "ProviderWaitReason": {
+        "description": "Why a review's run waits on a provider.",
+        "enum": [
+          "GITHUB_RATE_LIMIT"
+        ],
+        "type": "string"
+      },
       "PullRequestMergeGate": {
         "properties": {
           "assessment_count": {
@@ -4783,7 +4826,7 @@
                 "$ref": "#/components/schemas/ExportReviewKind"
               }
             ],
-            "description": "Whether the review analyzes a pull request, a deployment, a local patch, pushed\n commits or selected whole files."
+            "description": "Whether the review analyzes a pull request, a deployment, a local patch, pushed\n commits, selected whole files, a merge group or a revision scan."
           },
           "organization_id": {
             "description": "The organization that owns the review.",
@@ -5793,7 +5836,7 @@
   },
   "info": {
     "title": "Proofline Review API",
-    "version": "5.0.0"
+    "version": "5.1.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -7107,10 +7150,12 @@
             "style": "simple"
           },
           {
+            "description": "The repository's name without its owner, or a name it had before a rename.",
             "in": "path",
             "name": "repository",
             "required": true,
             "schema": {
+              "description": "The repository's name without its owner, or a name it had before a rename.",
               "type": "string"
             },
             "style": "simple"
@@ -7301,10 +7346,12 @@
             "style": "simple"
           },
           {
+            "description": "The repository's name without its owner, or a name it had before a rename.",
             "in": "path",
             "name": "repository",
             "required": true,
             "schema": {
+              "description": "The repository's name without its owner, or a name it had before a rename.",
               "type": "string"
             },
             "style": "simple"

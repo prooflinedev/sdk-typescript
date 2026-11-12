@@ -1375,6 +1375,81 @@ test("exports preserve CSV cells, opaque cursors and tenant authorization failur
   );
 });
 
+test("review exports retain every recorded kind in both formats", async (t) => {
+  const kinds = [
+    "PULL_REQUEST",
+    "DEPLOYMENT",
+    "PATCH",
+    "COMMIT",
+    "FILES",
+    "MERGE_GROUP",
+    "REVISION_SCAN",
+  ];
+  const { baseUrl } = await server(t, (request, response) => {
+    assert.match(
+      request.url,
+      new RegExp(`/organizations/${orgId}/exports/reviews\\?`),
+    );
+    const csv = request.url.includes("format=csv");
+    response.writeHead(200, {
+      "content-type": csv ? "text/csv" : "application/x-ndjson",
+      "x-proofline-export-version": "1",
+      "x-proofline-export-settled-until": "2026-10-25T00:00:00Z",
+    });
+    response.end(
+      csv
+        ? "dataset_version,kind\r\n" +
+            kinds.map((kind) => `1,${kind}\r\n`).join("")
+        : kinds
+            .map((kind) => JSON.stringify({ dataset_version: 1, kind }) + "\n")
+            .join(""),
+    );
+  });
+  const client = new ProoflineClient({ baseUrl, token });
+  for (const format of ["csv", "ndjson"]) {
+    const page = await client.exportReviews({
+      path: { org_id: orgId, dataset: "reviews" },
+      query: {
+        from: "2026-10-01T00:00:00Z",
+        to: "2026-10-25T00:00:00Z",
+        format,
+      },
+    });
+    assert.deepEqual(
+      page.rows.map((row) => row.kind),
+      kinds,
+    );
+    assert.equal(page.nextCursor, null);
+  }
+  const work = await mkdtemp(join(tmpdir(), "sdk-export-types-"));
+  t.after(() => rm(work, { recursive: true, force: true }));
+  const entry = fileURLToPath(new URL("../dist/index.js", import.meta.url));
+  const fixture = join(work, "consumer.mts");
+  await writeFile(
+    fixture,
+    `
+import type { components } from ${JSON.stringify(entry)};
+const kinds: components["schemas"]["ReviewsExportRow"]["kind"][] = ${JSON.stringify(kinds)};
+console.log(kinds);
+`,
+  );
+  execFileSync(process.execPath, [
+    fileURLToPath(
+      new URL("../node_modules/typescript/lib/tsc.js", import.meta.url),
+    ),
+    "--noEmit",
+    "--strict",
+    "--target",
+    "ES2022",
+    "--module",
+    "NodeNext",
+    "--moduleResolution",
+    "NodeNext",
+    "--skipLibCheck",
+    fixture,
+  ]);
+});
+
 test("knowledge negotiates MCP and preserves scoped refusals without retry", async (t) => {
   let refusal = false;
   let wrongId = false;

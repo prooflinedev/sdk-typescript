@@ -1454,6 +1454,12 @@ export interface components {
              *      Absent when that observation is unavailable; scalar counts remain separate.
              */
             open_items_observation?: components["schemas"]["ReviewOpenItems"] | null;
+            /**
+             * @description What holds the review now: GitHub's rate limit, and when it resets.
+             *      Null unless one of the review's runs waits for it, and once the run
+             *      continues.
+             */
+            provider_wait?: components["schemas"]["ProviderWait"] | null;
             /** @description The review's stable public address: `rev_` followed by its identifier without hyphens. */
             public_key: string;
             /**
@@ -1659,7 +1665,7 @@ export interface components {
         /** @enum {string} */
         ExportFindingSeverity: "WARNING" | "SERIOUS";
         /** @enum {string} */
-        ExportReviewKind: "PULL_REQUEST" | "DEPLOYMENT" | "PATCH" | "COMMIT" | "FILES";
+        ExportReviewKind: "PULL_REQUEST" | "DEPLOYMENT" | "PATCH" | "COMMIT" | "FILES" | "MERGE_GROUP" | "REVISION_SCAN";
         /** @enum {string} */
         ExportReviewStatus: "PENDING" | "RUNNING" | "COMPLETED" | "INCOMPLETE" | "FAILED" | "SUPERSEDED" | "STOPPED" | "EXCLUDED";
         /** @description The closed row vocabulary of the existing raw-stream export operation. */
@@ -2398,6 +2404,25 @@ export interface components {
         };
         /** @description Why the summary carries prose or does not. */
         ProseOutcome: "PUBLISHED" | "NO_CHANGE_DIGEST" | "NOT_REQUESTED" | "MODEL_UNAVAILABLE" | "MALFORMED" | "REJECTED" | "UNGROUNDED";
+        /** @description A provider wait that holds the review now. */
+        ProviderWait: {
+            /**
+             * @description `GITHUB_RATE_LIMIT`: GitHub's rate limit for the organization's App
+             *      installation is reached, and the review continues after it resets.
+             */
+            reason: components["schemas"]["ProviderWaitReason"];
+            /**
+             * Format: date-time
+             * @description When the wait ends: the reset GitHub named, or, when it named none,
+             *      when the run is due again.
+             */
+            until: string;
+        };
+        /**
+         * @description Why a review's run waits on a provider.
+         * @enum {string}
+         */
+        ProviderWaitReason: "GITHUB_RATE_LIMIT";
         PullRequestMergeGate: {
             /**
              * Format: int32
@@ -2947,7 +2972,7 @@ export interface components {
             head_commit_sha?: string | null;
             /**
              * @description Whether the review analyzes a pull request, a deployment, a local patch, pushed
-             *      commits or selected whole files.
+             *      commits, selected whole files, a merge group or a revision scan.
              */
             kind: components["schemas"]["ExportReviewKind"];
             /**
@@ -4169,6 +4194,7 @@ export interface operations {
             path: {
                 org_id: string;
                 pull_request_number: number;
+                /** @description The repository's name without its owner, or a name it had before a rename. */
                 repository: string;
             };
             cookie?: never;
@@ -4201,6 +4227,7 @@ export interface operations {
             path: {
                 org_id: string;
                 pull_request_number: number;
+                /** @description The repository's name without its owner, or a name it had before a rename. */
                 repository: string;
                 run_number: number;
             };
