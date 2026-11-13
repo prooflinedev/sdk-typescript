@@ -1385,6 +1385,13 @@ export interface components {
             /** @description Display names of this review's assessed environments, not current repository links. */
             environment_display_names: string[];
             /**
+             * @description For a pull-request review, each environment its repository linked
+             *      when the review was created and each environment it assessed, with
+             *      whether the review checked it and why not. Absent for any other
+             *      review, and when the repository links no environment.
+             */
+            environments?: components["schemas"]["EnvironmentCheck"][];
+            /**
              * Format: int64
              * @description How many findings this review's assessments recorded, across all of them.
              */
@@ -1415,6 +1422,13 @@ export interface components {
              * @description The review's identifier.
              */
             id: string;
+            /**
+             * @description Why an `INCOMPLETE` review ended incomplete, as its incomplete
+             *      assessments recorded it, in name order. `UNKNOWN` alone when none
+             *      recorded a cause. Absent for every other status, and on reads other
+             *      than the reviews list and a single review.
+             */
+            incomplete_causes?: components["schemas"]["IncompleteCause"][];
             /** @description Present and true when this run is a Deep Review. */
             is_deep_review?: boolean;
             /**
@@ -1534,8 +1548,10 @@ export interface components {
              */
             repository_url?: string | null;
             /**
-             * @description Who asked for this review, for a review a person requested. Null on
-             *      automatic reviews and on reviews recorded before requesters were.
+             * @description Who asked for this review, for the reviews a person asked for: the
+             *      run-now button, a rerun, a pull request `review` command, or local
+             *      changes and pushed commits sent from the CLI or an editor. Absent on
+             *      automatic reviews, and on reviews recorded before requesters were.
              */
             requested_by?: components["schemas"]["ActorView"] | null;
             /**
@@ -1652,6 +1668,23 @@ export interface components {
             /** @description Severity used by the series count; the linked occurrence may be less severe. */
             severity: string;
         };
+        /**
+         * @description One environment linked to the reviewed repository, and whether this
+         *      review checked it.
+         */
+        EnvironmentCheck: {
+            /** @description The environment's display name. */
+            environment_display_name: string;
+            /**
+             * @description Why the environment was not checked or does not apply. Null when it
+             *      was checked or its check is still running.
+             */
+            reason?: components["schemas"]["EnvironmentCheckReason"] | null;
+            /** @description Whether this review checked the environment. */
+            state: components["schemas"]["EnvironmentCheckState"];
+        };
+        EnvironmentCheckReason: "NOT_COVERED" | "FORK_PULL_REQUEST" | "UNFINISHED" | "ENDED" | "PULL_REQUEST_REVIEWS_OFF";
+        EnvironmentCheckState: "CHECKED" | "CHECKING" | "NOT_CHECKED" | "NOT_APPLICABLE";
         /** @enum {string} */
         ExportEvidenceKind: "repository_file" | "repository_file_at_commit" | "companion_repository_file" | "commit" | "workflow_run" | "world_entity" | "deterministic_test" | "recorded_read" | "text";
         ExportEvidenceRef: {
@@ -2129,6 +2162,11 @@ export interface components {
         };
         /** @enum {string} */
         GateStatus: "REQUESTED" | "EVALUATING" | "ALLOWED" | "BLOCKED" | "BYPASSED" | "SUPERSEDED";
+        /**
+         * @description Why an assessment of the review ended incomplete, as the assessment
+         *      recorded it (`incompleteness_kind`), or `UNKNOWN` when none did.
+         */
+        IncompleteCause: ("NOT_CONFIGURED" | "POLICY_EXCLUDED" | "EVIDENCE_UNAVAILABLE" | "HYPOTHESES_UNRESOLVED" | "MODEL_BUDGET_EXHAUSTED") | "UNKNOWN";
         /**
          * @description One finding a patch review re-verified against the patch. The outcome is
          *      local: the pull request's finding is unchanged whatever it is.
@@ -2856,6 +2894,13 @@ export interface components {
              */
             id: string;
             /**
+             * @description Why an `INCOMPLETE` review ended incomplete, as its incomplete
+             *      assessments recorded it, in name order. `UNKNOWN` alone when none
+             *      recorded a cause. Absent for every other status, and on reads other
+             *      than the reviews list and a single review.
+             */
+            incomplete_causes?: components["schemas"]["IncompleteCause"][];
+            /**
              * @description `PULL_REQUEST`, `DEPLOYMENT`, `PATCH`, a review of local changes
              *      sent as a patch, `COMMIT`, a review of pushed commits, `FILES`,
              *      complete selected files at one pushed commit, `MERGE_GROUP`, the
@@ -2937,6 +2982,13 @@ export interface components {
              *      cannot be joined with the stored name.
              */
             repository_url?: string | null;
+            /**
+             * @description Who asked for this review, for the reviews a person asked for: the
+             *      run-now button, a rerun, a pull request `review` command, or local
+             *      changes and pushed commits sent from the CLI or an editor. Absent on
+             *      automatic reviews, and on reviews recorded before requesters were.
+             */
+            requested_by?: components["schemas"]["ActorView"] | null;
             /**
              * Format: int64
              * @description One-based, append-only ordinal within one repository pull request.
