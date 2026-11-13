@@ -2468,6 +2468,16 @@ export interface components {
              */
             merged_by_github_user_id?: number | null;
             /**
+             * @description The merger's GitHub login as this organization's developer record last saw it. Display
+             *      metadata only. Null when the organization has no record of that user.
+             */
+            merged_by_login?: string | null;
+            /**
+             * @description The merger's name, from the organization's developer record or their Proofline account.
+             *      Display metadata only: `merged_by_github_user_id` stays the identity. Null when unknown.
+             */
+            merged_by_name?: string | null;
+            /**
              * Format: int64
              * @description The actual pull request merged in the recorded bypass, which may differ from the captured PR.
              */
