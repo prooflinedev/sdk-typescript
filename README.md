@@ -38,6 +38,23 @@ try {
 }
 ```
 
+## Waiting for the review of a commit
+
+A CI job knows the commit it builds, not the review's ID. `waitForCommitReview` takes the full head commit SHA, waits for Proofline to create the review, then waits for the review to finish.
+
+```typescript
+const result = await client.waitForCommitReview(organizationId, headCommitSha, {
+  repositoryId, // required only when several repositories have the commit
+  timeoutMs: 15 * 60_000,
+});
+if (result.reviewId === null) console.error(result.reason);
+else console.log(result.status, result.reviewUrl, result.gaps);
+```
+
+The result has the fields of `waitForReview`, plus `commitSha` and `reviewId`. One `timeoutMs` bounds both phases. A commit that has no review after `discoveryTimeoutMs`, two minutes by default, returns `TIMED_OUT` with a null `reviewId` and `reviewUrl`: no review exists, which is not a review result. `findCommitReview` makes the same lookup once and returns the review summary or `null`.
+
+Pass the pull request's head commit. On a GitHub Actions `pull_request` event, `GITHUB_SHA` is the merge commit, which Proofline does not review; read `pull_request.head.sha` from the event payload. Branch names and abbreviated SHAs throw a `TypeError` before any request. Reviews in more than one repository at the same commit throw `urn:proofline:sdk:ambiguous-commit` until `repositoryId` names one. Several reviews of one commit in one repository resolve to the newest.
+
 ## Coverage uploads
 
 Upload CI coverage reports with a repository-restricted token that holds `coverage:write`. The token holder must have current GitHub write access to that repository. Set `PROOFLINE_TOKEN` to that token and pass the full commit SHA that the tests ran on. The server refuses branch names and abbreviated SHAs.
