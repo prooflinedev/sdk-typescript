@@ -1189,6 +1189,16 @@
               "null"
             ]
           },
+          "reason_codes": {
+            "description": "Public causes of an `INCOMPLETE` code assessment: `OUT_OF_CREDITS`\n when credits refused its model. Absent otherwise; other recorded\n details stay private.",
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "started_at": {
             "description": "When the code assessment started. Null until it starts.",
             "format": "date-time",
@@ -5996,7 +6006,7 @@
   },
   "info": {
     "title": "Proofline Review API",
-    "version": "5.4.0"
+    "version": "5.5.0"
   },
   "openapi": "3.1.0",
   "paths": {

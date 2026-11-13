@@ -1064,6 +1064,12 @@ export interface components {
              */
             incompleteness_kind?: string | null;
             /**
+             * @description Public causes of an `INCOMPLETE` code assessment: `OUT_OF_CREDITS`
+             *      when credits refused its model. Absent otherwise; other recorded
+             *      details stay private.
+             */
+            reason_codes?: string[] | null;
+            /**
              * Format: date-time
              * @description When the code assessment started. Null until it starts.
              */
