@@ -68,6 +68,25 @@ export interface WaitOptions {
   timeoutMs?: number;
 }
 
+export interface CommitReviewOptions {
+  /** Proofline ID of the repository that has the commit. Required when several repositories have it. */
+  repositoryId?: string;
+}
+
+export interface CommitWaitOptions extends WaitOptions, CommitReviewOptions {
+  /** How long to look for a review of the commit before giving up. Defaults to two minutes. */
+  discoveryTimeoutMs?: number;
+}
+
+/** A review outcome addressed by the commit the review is pinned to. */
+export interface CommitReviewOutcome extends Omit<ReviewOutcome, "reviewUrl"> {
+  /** The full lowercase commit SHA the caller named. */
+  commitSha: string;
+  /** Null when no review of the commit appeared; that is not a review result. */
+  reviewId: string | null;
+  reviewUrl: string | null;
+}
+
 export class ProoflineClient extends Operations {
   readonly #transport: Transport;
   readonly mcp: McpClient;
@@ -149,6 +168,122 @@ export class ProoflineClient extends Operations {
     throw protocol("the review collection exceeds maxPages");
   }
 
+  /**
+   * Returns the latest review pinned to an exact head commit, or null when
+   * none exists yet. A missing review says nothing about the commit.
+   */
+  async findCommitReview(
+    orgId: string,
+    commitSha: string,
+    options: CommitReviewOptions = {},
+  ): Promise<components["schemas"]["ReviewSummary"] | null> {
+    return this.#commitReview(orgId, fullSha(commitSha), options.repositoryId);
+  }
+
+  /**
+   * Waits for the review of an exact head commit: first for the review to
+   * appear, then for it to finish. One `timeoutMs` bounds both phases.
+   */
+  async waitForCommitReview(
+    orgId: string,
+    commitSha: string,
+    options: CommitWaitOptions = {},
+  ): Promise<CommitReviewOutcome> {
+    const sha = fullSha(commitSha);
+    const timeout = options.timeoutMs ?? 20 * 60_000;
+    const discovery = options.discoveryTimeoutMs ?? 2 * 60_000;
+    if (!Number.isFinite(timeout) || timeout < 0)
+      throw new TypeError("timeoutMs must be finite and nonnegative");
+    if (!Number.isFinite(discovery) || discovery < 0)
+      throw new TypeError("discoveryTimeoutMs must be finite and nonnegative");
+    const started = performance.now();
+    const deadline = started + timeout;
+    const discoveryDeadline = Math.min(deadline, started + discovery);
+    const absent = (): CommitReviewOutcome => ({
+      status: "TIMED_OUT",
+      commitSha: sha,
+      reviewId: null,
+      reviewUrl: null,
+      review: null,
+      gaps: [],
+      reason:
+        discoveryDeadline < deadline
+          ? "no review of the commit appeared before discoveryTimeoutMs"
+          : "no review of the commit appeared before timeoutMs",
+    });
+    let interval = 2_000;
+    let found: components["schemas"]["ReviewSummary"] | null = null;
+    for (;;) {
+      if (performance.now() >= discoveryDeadline) return absent();
+      try {
+        found = await this.#commitReview(
+          orgId,
+          sha,
+          options.repositoryId,
+          discoveryDeadline,
+        );
+      } catch (error) {
+        if (expired(error, discoveryDeadline)) return absent();
+        throw error;
+      }
+      if (found !== null) break;
+      await sleep(
+        Math.min(interval, Math.max(0, discoveryDeadline - performance.now())),
+      );
+      interval = Math.min(interval * 2, 30_000);
+    }
+    const result = await this.waitForReview(orgId, found.id, {
+      timeoutMs: Math.max(0, deadline - performance.now()),
+    });
+    if (
+      result.review !== null &&
+      result.review.head_commit_sha?.toLowerCase() !== sha
+    )
+      throw protocol("the review is not pinned to the requested commit");
+    return { ...result, commitSha: sha, reviewId: found.id };
+  }
+
+  async #commitReview(
+    orgId: string,
+    sha: string,
+    repositoryId: string | undefined,
+    deadline?: number,
+  ): Promise<components["schemas"]["ReviewSummary"] | null> {
+    const page = await this.#transport.request<unknown>(
+      "GET",
+      "/api/v1/organizations/{org_id}/reviews",
+      {
+        path: { org_id: orgId },
+        // A search equal to a full head SHA lists the latest run at that commit.
+        query: { search: sha, repository: repositoryId },
+      },
+      deadline,
+    );
+    if (!isObject(page) || !Array.isArray(page.items))
+      throw protocol("the review page has no typed collection metadata");
+    // The server may fall back to a text search; keep exact head matches only.
+    const matches: components["schemas"]["ReviewSummary"][] = [];
+    for (const item of page.items) {
+      if (!isObject(item) || typeof item.id !== "string" || !item.id)
+        throw protocol("a review summary has no identity");
+      if (
+        typeof item.head_commit_sha === "string" &&
+        item.head_commit_sha.toLowerCase() === sha
+      )
+        matches.push(item as components["schemas"]["ReviewSummary"]);
+    }
+    if (
+      new Set(matches.map((match) => match.repository_full_name ?? "")).size > 1
+    )
+      throw new ProoflineError(
+        0,
+        "urn:proofline:sdk:ambiguous-commit",
+        "more than one repository has a review of this commit; name repositoryId",
+      );
+    // Reviews arrive newest first.
+    return matches[0] ?? null;
+  }
+
   async waitForReview(
     orgId: string,
     reviewId: string,
@@ -227,6 +362,22 @@ import { ProoflineError } from "./transport.js";
 
 function protocol(detail: string): ProoflineError {
   return new ProoflineError(0, "urn:proofline:sdk:invalid-response", detail);
+}
+
+function fullSha(value: string): string {
+  if (typeof value !== "string" || !/^[0-9a-fA-F]{40}$/.test(value))
+    throw new TypeError("commitSha must be a full 40-character commit SHA");
+  return value.toLowerCase();
+}
+
+function expired(error: unknown, deadline: number): boolean {
+  return (
+    error instanceof ProoflineError &&
+    (error.type === "urn:proofline:sdk:timeout" ||
+      (error.status === 0 &&
+        error.type === "urn:proofline:sdk:transport" &&
+        performance.now() >= deadline))
+  );
 }
 
 function integerLimit(value: number, name: string): number {
