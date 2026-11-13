@@ -1290,6 +1290,165 @@ test("pagination keeps filters and refuses cycles, incomplete metadata and resou
   );
 });
 
+test("pull request review iteration follows cursors and refuses cycles and bounds", async (t) => {
+  let mode = "normal";
+  const fixture = await server(t, (request, response) => {
+    if (mode === "malformed") return json(response, 200, null);
+    const url = new URL(request.url, "http://127.0.0.1");
+    const cursor = url.searchParams.get("cursor");
+    if (mode === "cycle")
+      return json(response, 200, {
+        items: [{ id: cursor ? "second" : "first" }],
+        truncated: true,
+        next_cursor: "same",
+        filters: { repositories: [], environments: [], authors: [] },
+      });
+    if (mode === "untruncated-cursor")
+      return json(response, 200, {
+        items: [{ id: "only" }],
+        truncated: false,
+        next_cursor: "stray",
+        filters: { repositories: [], environments: [], authors: [] },
+      });
+    const more = cursor === null;
+    return json(response, 200, {
+      items: [{ id: cursor ? "second" : "first" }],
+      truncated: more,
+      next_cursor: more ? "next" : null,
+      filters: { repositories: [], environments: [], authors: [] },
+    });
+  });
+  const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
+  const parameters = {
+    path: { org_id: orgId, repository: repoId, pull_request_number: 7 },
+    query: { status: "all" },
+  };
+  const items = await Array.fromAsync(
+    client.iterPullRequestReviews(parameters),
+  );
+  assert.deepEqual(
+    items.map((item) => item.id),
+    ["first", "second"],
+  );
+  assert(fixture.calls.every(({ url }) => url.includes("status=all")));
+  mode = "cycle";
+  await assert.rejects(
+    Array.fromAsync(client.iterPullRequestReviews(parameters)),
+    (error) => error.type === "urn:proofline:sdk:invalid-response",
+  );
+  mode = "normal";
+  await assert.rejects(
+    Array.fromAsync(client.iterPullRequestReviews(parameters, { maxPages: 1 })),
+    (error) => error.type === "urn:proofline:sdk:invalid-response",
+  );
+  await assert.rejects(
+    Array.fromAsync(client.iterPullRequestReviews(parameters, { maxItems: 1 })),
+    (error) => error.type === "urn:proofline:sdk:invalid-response",
+  );
+  mode = "untruncated-cursor";
+  await assert.rejects(
+    Array.fromAsync(client.iterPullRequestReviews(parameters)),
+    (error) => error.type === "urn:proofline:sdk:invalid-response",
+  );
+  mode = "malformed";
+  await assert.rejects(
+    Array.fromAsync(client.iterPullRequestReviews(parameters)),
+    (error) =>
+      error instanceof ProoflineError &&
+      error.type === "urn:proofline:sdk:invalid-response",
+  );
+});
+
+test("pull request review iteration treats a null starting cursor as unset and rejects empty cursors", async (t) => {
+  let mode = "normal";
+  const fixture = await server(t, (request, response) => {
+    const url = new URL(request.url, "http://127.0.0.1");
+    const cursor = url.searchParams.get("cursor");
+    if (mode === "empty")
+      return json(response, 200, {
+        items: [{ id: "first" }],
+        truncated: true,
+        next_cursor: "",
+        filters: { repositories: [], environments: [], authors: [] },
+      });
+    const more = cursor === null;
+    return json(response, 200, {
+      items: [{ id: cursor ? "second" : "first" }],
+      truncated: more,
+      next_cursor: more ? "next" : null,
+      filters: { repositories: [], environments: [], authors: [] },
+    });
+  });
+  const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
+  const parameters = {
+    path: { org_id: orgId, repository: repoId, pull_request_number: 7 },
+    query: { status: "all", cursor: null },
+  };
+  const items = await Array.fromAsync(
+    client.iterPullRequestReviews(parameters),
+  );
+  assert.deepEqual(
+    items.map((item) => item.id),
+    ["first", "second"],
+  );
+  assert(fixture.calls.every(({ url }) => !url.includes("cursor=null")));
+  mode = "empty";
+  await assert.rejects(
+    Array.fromAsync(client.iterPullRequestReviews(parameters)),
+    (error) => error.type === "urn:proofline:sdk:invalid-response",
+  );
+});
+
+test("pull request review iteration rejects invalid limits before any request", async (t) => {
+  const fixture = await server(t, (_request, response) =>
+    json(response, 200, {
+      items: [],
+      truncated: false,
+      next_cursor: null,
+      filters: { repositories: [], environments: [], authors: [] },
+    }),
+  );
+  const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
+  const parameters = {
+    path: { org_id: orgId, repository: repoId, pull_request_number: 7 },
+  };
+  await assert.rejects(
+    Array.fromAsync(
+      client.iterPullRequestReviews(parameters, { maxPages: 1.5 }),
+    ),
+  );
+  await assert.rejects(
+    Array.fromAsync(
+      client.iterPullRequestReviews(parameters, { maxItems: -1 }),
+    ),
+  );
+  assert.equal(fixture.calls.length, 0);
+});
+
+test("iterReviews yields nothing from a page whose envelope is rejected", async (t) => {
+  const fixture = await server(t, (_request, response) =>
+    json(response, 200, {
+      items: [{ id: "should-not-yield" }],
+      truncated: false,
+      next_cursor: "stray",
+      filters: { repositories: [], environments: [], authors: [] },
+    }),
+  );
+  const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
+  const yielded = [];
+  await assert.rejects(
+    (async () => {
+      for await (const item of client.iterReviews({
+        path: { org_id: orgId },
+      })) {
+        yielded.push(item);
+      }
+    })(),
+    (error) => error.type === "urn:proofline:sdk:invalid-response",
+  );
+  assert.deepEqual(yielded, []);
+});
+
 test("credentials remain on the configured origin and malformed responses carry no raw body", async (t) => {
   for (const baseUrl of [
     "http://customer.example",

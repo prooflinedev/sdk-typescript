@@ -18,7 +18,11 @@ import {
 
 export type { ExportPage, ExportParameters } from "./exports.js";
 
-import { type ListReviewsParameters, Operations } from "./operations.js";
+import {
+  type ListPullRequestReviewsParameters,
+  type ListReviewsParameters,
+  Operations,
+} from "./operations.js";
 import type { components } from "./schema.js";
 import { type ClientOptions, sleep, Transport } from "./transport.js";
 
@@ -104,17 +108,47 @@ export class ProoflineClient extends Operations {
     parameters: ListReviewsParameters,
     options: { maxPages?: number; maxItems?: number } = {},
   ): AsyncGenerator<components["schemas"]["ReviewSummary"]> {
+    yield* this.paginateReviews(
+      parameters,
+      (query) => this.listReviews({ ...parameters, query }),
+      options,
+    );
+  }
+
+  async *iterPullRequestReviews(
+    parameters: ListPullRequestReviewsParameters,
+    options: { maxPages?: number; maxItems?: number } = {},
+  ): AsyncGenerator<components["schemas"]["ReviewSummary"]> {
+    yield* this.paginateReviews(
+      parameters,
+      (query) => this.listPullRequestReviews({ ...parameters, query }),
+      options,
+    );
+  }
+
+  private async *paginateReviews(
+    parameters: {
+      query?: { cursor?: string | null } & Record<string, unknown>;
+    },
+    fetchPage: (query: Record<string, unknown>) => Promise<{
+      items?: unknown;
+      truncated?: unknown;
+      next_cursor?: unknown;
+    }>,
+    options: { maxPages?: number; maxItems?: number },
+  ): AsyncGenerator<components["schemas"]["ReviewSummary"]> {
     const maxPages = integerLimit(options.maxPages ?? 100, "maxPages");
     const maxItems = integerLimit(options.maxItems ?? 10_000, "maxItems");
     const seen = new Set<string>();
     let count = 0;
-    let cursor = parameters.query?.cursor;
+    const { cursor: startCursor, ...baseQuery } = parameters.query ?? {};
+    let cursor: string | undefined = startCursor ?? undefined;
     for (let index = 0; index < maxPages; index += 1) {
       const query = {
-        ...parameters.query,
+        ...baseQuery,
         ...(cursor === undefined ? {} : { cursor }),
       };
-      const page = await this.listReviews({ ...parameters, query });
+      const page = await fetchPage(query);
       if (
         !isObject(page) ||
         !Array.isArray(page.items) ||
@@ -124,27 +158,28 @@ export class ProoflineClient extends Operations {
           typeof page.next_cursor !== "string")
       )
         throw protocol("the review page has no typed collection metadata");
+      // Check the envelope before yielding, so a rejected page yields no items.
+      if (!page.truncated) {
+        if (page.next_cursor)
+          throw protocol(
+            "the review page has an unexpected continuation cursor",
+          );
+      } else if (
+        !page.next_cursor ||
+        page.next_cursor === cursor ||
+        seen.has(page.next_cursor)
+      ) {
+        throw protocol("the review collection has no advancing cursor");
+      }
       for (const item of page.items) {
         if (count >= maxItems)
           throw protocol("the review collection exceeds maxItems");
         count += 1;
         yield item;
       }
-      if (!page.truncated) {
-        if (page.next_cursor)
-          throw protocol(
-            "the review page has an unexpected continuation cursor",
-          );
-        return;
-      }
-      if (
-        !page.next_cursor ||
-        page.next_cursor === cursor ||
-        seen.has(page.next_cursor)
-      )
-        throw protocol("the review collection has no advancing cursor");
-      seen.add(page.next_cursor);
-      cursor = page.next_cursor;
+      if (!page.truncated) return;
+      seen.add(page.next_cursor as string);
+      cursor = page.next_cursor as string;
     }
     throw protocol("the review collection exceeds maxPages");
   }
