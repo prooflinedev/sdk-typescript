@@ -2,6 +2,10 @@ import { FixesClient } from "./fixes.js";
 
 export type { ReverificationRequest } from "./fixes.js";
 
+import { type CoverageFilesUpload, readCoverageFiles } from "./coverage.js";
+
+export type { CoverageFile, CoverageFilesUpload } from "./coverage.js";
+
 import { McpClient } from "./mcp.js";
 
 export type { McpTarget } from "./mcp.js";
@@ -18,7 +22,11 @@ import {
 
 export type { ExportPage, ExportParameters } from "./exports.js";
 
-import { type ListReviewsParameters, Operations } from "./operations.js";
+import {
+  type ListReviewsParameters,
+  Operations,
+  type UploadCoverageReportsParameters,
+} from "./operations.js";
 import type { components } from "./schema.js";
 import { type ClientOptions, sleep, Transport } from "./transport.js";
 
@@ -97,6 +105,17 @@ export class ProoflineClient extends Operations {
       undefined,
       (text, headers) => decodeExport(text, headers, format),
       format === "csv" ? "text/csv" : "application/x-ndjson",
+    );
+  }
+
+  /** Reads coverage reports from disk and uploads them in one request. */
+  async uploadCoverageFiles(
+    parameters: UploadCoverageReportsParameters,
+    upload: CoverageFilesUpload,
+  ): Promise<components["schemas"]["CoverageUploadResponse"]> {
+    return this.uploadCoverageReports(
+      parameters,
+      await readCoverageFiles(upload),
     );
   }
 
