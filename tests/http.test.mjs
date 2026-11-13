@@ -1375,6 +1375,150 @@ test("exports preserve CSV cells, opaque cursors and tenant authorization failur
   );
 });
 
+test("export iterators stream multi-page rows and refuse cursor cycles, horizon drift, column drift and resource bounds", async (t) => {
+  let mode = "ok";
+  const { baseUrl, calls } = await server(t, (request, response) => {
+    const url = new URL(request.url, "http://localhost");
+    const cursor = url.searchParams.get("cursor");
+    if (mode === "blank-cursor") {
+      response.writeHead(200, {
+        "content-type": "application/x-ndjson",
+        "x-proofline-export-version": "1",
+        "x-proofline-export-settled-until": "2026-10-25T00:00:00Z",
+        "x-proofline-export-next-cursor": "   ",
+      });
+      return response.end('{"dataset_version":1,"id":"r1"}\n');
+    }
+    if (mode === "cycle") {
+      response.writeHead(200, {
+        "content-type": "application/x-ndjson",
+        "x-proofline-export-version": "1",
+        "x-proofline-export-settled-until": "2026-10-25T00:00:00Z",
+        "x-proofline-export-next-cursor": cursor ?? "c1",
+      });
+      return response.end('{"dataset_version":1,"id":"r1"}\n');
+    }
+    if (mode === "horizon-drift") {
+      response.writeHead(200, {
+        "content-type": "application/x-ndjson",
+        "x-proofline-export-version": "1",
+        "x-proofline-export-settled-until": cursor
+          ? "2026-10-26T00:00:00Z"
+          : "2026-10-25T00:00:00Z",
+        ...(cursor ? {} : { "x-proofline-export-next-cursor": "c2" }),
+      });
+      return response.end('{"dataset_version":1,"id":"r1"}\n');
+    }
+    if (mode === "column-drift") {
+      response.writeHead(200, {
+        "content-type": "text/csv",
+        "x-proofline-export-version": "1",
+        "x-proofline-export-settled-until": "2026-10-25T00:00:00Z",
+        ...(cursor ? {} : { "x-proofline-export-next-cursor": "c2" }),
+      });
+      return response.end(
+        cursor
+          ? "dataset_version,other\r\n1,b\r\n"
+          : "dataset_version,id\r\n1,a\r\n",
+      );
+    }
+    response.writeHead(200, {
+      "content-type": "application/x-ndjson",
+      "x-proofline-export-version": "1",
+      "x-proofline-export-settled-until": "2026-10-25T00:00:00Z",
+      ...(cursor ? {} : { "x-proofline-export-next-cursor": "page-2" }),
+    });
+    response.end(
+      cursor
+        ? '{"dataset_version":1,"id":"r2"}\n{"dataset_version":1,"id":"r3"}\n'
+        : '{"dataset_version":1,"id":"r1"}\n',
+    );
+  });
+  const client = new ProoflineClient({ baseUrl, token });
+  const parameters = {
+    path: { org_id: orgId, dataset: "reviews" },
+    query: {
+      from: "2026-10-01T00:00:00Z",
+      to: "2026-10-25T00:00:00Z",
+      format: "ndjson",
+    },
+  };
+  const rows = [];
+  for await (const row of client.iterExportRows(parameters)) rows.push(row.id);
+  assert.deepEqual(rows, ["r1", "r2", "r3"]);
+  assert.match(calls[1].url, /cursor=page-2/);
+
+  const partial = [];
+  await assert.rejects(
+    async () => {
+      for await (const row of client.iterExportRows(parameters, { maxRows: 2 }))
+        partial.push(row.id);
+    },
+    (error) =>
+      error instanceof ProoflineError &&
+      error.type === "urn:proofline:sdk:invalid-response" &&
+      error.detail === "the export collection exceeds maxRows",
+  );
+  assert.deepEqual(partial, ["r1", "r2"]);
+
+  await assert.rejects(
+    async () => {
+      for await (const _ of client.iterExportPages(parameters, {
+        maxPages: 1,
+      })) {
+        // exhaust first page
+      }
+    },
+    (error) =>
+      error instanceof ProoflineError &&
+      error.detail === "the export collection exceeds maxPages",
+  );
+
+  for (const badOption of [
+    { maxPages: 0 },
+    { maxRows: -1 },
+    { maxRows: 1.5 },
+  ]) {
+    await assert.rejects(async () => {
+      for await (const _ of client.iterExportRows(parameters, badOption)) {
+        // unreachable
+      }
+    }, TypeError);
+  }
+
+  for (const [nextMode, expectedDetail] of [
+    ["blank-cursor", "the export body or metadata is invalid"],
+    ["cycle", "the export collection has no advancing cursor"],
+    ["horizon-drift", "the export settled horizon changed across pages"],
+  ]) {
+    mode = nextMode;
+    await assert.rejects(
+      async () => {
+        for await (const _ of client.iterExportPages(parameters)) {
+          // consume
+        }
+      },
+      (error) =>
+        error instanceof ProoflineError && error.detail === expectedDetail,
+    );
+  }
+
+  mode = "column-drift";
+  await assert.rejects(
+    async () => {
+      for await (const _ of client.iterExportPages({
+        ...parameters,
+        query: { ...parameters.query, format: "csv" },
+      })) {
+        // consume
+      }
+    },
+    (error) =>
+      error instanceof ProoflineError &&
+      error.detail === "the export CSV columns changed across pages",
+  );
+});
+
 test("review exports retain every recorded kind in both formats", async (t) => {
   const kinds = [
     "PULL_REQUEST",
