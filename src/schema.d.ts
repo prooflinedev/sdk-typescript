@@ -1366,6 +1366,13 @@ export interface components {
              */
             completed_at?: string | null;
             /**
+             * Format: int64
+             * @description The credits this run was charged so far, in microcredits, whoever
+             *      paid: the plan, the free review month or the organization's credits.
+             *      Null for a caller who is not a member of the organization.
+             */
+            cost_microcredits?: number | null;
+            /**
              * Format: date-time
              * @description When the review was created.
              */
