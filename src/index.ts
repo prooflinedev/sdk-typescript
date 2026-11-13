@@ -207,13 +207,71 @@ export class ProoflineClient extends Operations {
           status,
           url,
           review,
-          status === "INCOMPLETE"
-            ? review.assessment_count === 0 && review.assessments.length === 0
-              ? "the code assessment is unavailable or incomplete"
-              : review.status !== "INCOMPLETE"
-                ? "one or more assessment results are unavailable or unknown"
-                : null
-            : null,
+          status === "INCOMPLETE" ? incompleteReason(review) : null,
+        );
+      await sleep(
+        Math.min(interval, Math.max(0, deadline - performance.now())),
+      );
+      interval = Math.min(interval * 2, 60_000);
+    }
+  }
+
+  /**
+   * Wait for the review a deployment produced.
+   *
+   * A deployment addresses its review by public key, not by id, so identity is
+   * only known once the first response arrives: that id is adopted and every
+   * later poll must keep both it and the public key. A key that starts
+   * resolving elsewhere fails instead of quietly returning another review.
+   * Outcomes, retained review and deadline handling match `waitForReview`.
+   */
+  async waitForDeploymentReview(
+    orgId: string,
+    publicKey: string,
+    options: WaitOptions = {},
+  ): Promise<ReviewOutcome> {
+    const timeout = options.timeoutMs ?? 20 * 60_000;
+    if (!Number.isFinite(timeout) || timeout < 0)
+      throw new TypeError("timeoutMs must be finite and nonnegative");
+    const deadline = performance.now() + timeout;
+    const url = this.#transport.deploymentUrl(orgId, publicKey);
+    const expired = "the deployment review did not finish before timeoutMs";
+    let review: Review | null = null;
+    let reviewId: string | undefined;
+    let interval = 5_000;
+    for (;;) {
+      if (performance.now() >= deadline)
+        return outcome("TIMED_OUT", url, review, expired);
+      try {
+        review = await this.#transport.request<Review>(
+          "GET",
+          "/api/v1/organizations/{org_id}/reviews/deployments/{public_key}",
+          { path: { org_id: orgId, public_key: publicKey } },
+          deadline,
+        );
+      } catch (error) {
+        if (
+          error instanceof ProoflineError &&
+          error.type === "urn:proofline:sdk:timeout"
+        )
+          return outcome("TIMED_OUT", url, review, expired);
+        if (
+          error instanceof ProoflineError &&
+          error.status === 0 &&
+          performance.now() >= deadline
+        )
+          return outcome("TIMED_OUT", url, review, expired);
+        throw error;
+      }
+      validateDeploymentReview(review, publicKey, reviewId);
+      reviewId = review.id;
+      const status = terminal(review);
+      if (status !== null)
+        return outcome(
+          status,
+          url,
+          review,
+          status === "INCOMPLETE" ? incompleteReason(review) : null,
         );
       await sleep(
         Math.min(interval, Math.max(0, deadline - performance.now())),
@@ -260,11 +318,13 @@ function isObject(value: unknown): value is Record<string, unknown> {
 
 function validateReview(
   value: unknown,
-  reviewId: string,
+  reviewId?: string,
 ): asserts value is Review {
   if (
     !isObject(value) ||
-    value.id !== reviewId ||
+    typeof value.id !== "string" ||
+    value.id === "" ||
+    (reviewId !== undefined && value.id !== reviewId) ||
     typeof value.status !== "string" ||
     !Number.isSafeInteger(value.assessment_count) ||
     Number(value.assessment_count) < 0 ||
@@ -325,6 +385,28 @@ function validateReview(
       }
     }
   }
+}
+
+function validateDeploymentReview(
+  value: unknown,
+  publicKey: string,
+  reviewId?: string,
+): asserts value is Review {
+  validateReview(value, reviewId);
+  // The key names the review, so every response must keep naming the same one.
+  if (value.public_key !== publicKey)
+    throw protocol(
+      "the deployment review does not carry the public key it was requested by",
+    );
+}
+
+/** Why a terminal review is INCOMPLETE, in the words the outcome already uses. */
+function incompleteReason(review: Review): string | null {
+  if (review.assessment_count === 0 && review.assessments.length === 0)
+    return "the code assessment is unavailable or incomplete";
+  return review.status !== "INCOMPLETE"
+    ? "one or more assessment results are unavailable or unknown"
+    : null;
 }
 
 function checkGap(assessment: Assessment): boolean {
