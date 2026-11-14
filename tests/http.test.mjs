@@ -1604,7 +1604,7 @@ test("a new public operation generates a callable typed client method", async (t
     },
   };
   await writeFile(join(work, "openapi.public.json"), JSON.stringify(spec));
-  execFileSync("pnpm", ["run", "generate"], { cwd: work });
+  execFileSync("pnpm", ["run", "generate"], { cwd: work, shell: true });
   await writeFile(
     join(work, "src", "example-check.ts"),
     `import type { ProoflineClient } from "./index.js";
@@ -1612,7 +1612,7 @@ export async function answer(client: ProoflineClient): Promise<string> {
   return (await client.readExample({ path: { item: 7 } })).answer;
 }`,
   );
-  execFileSync("pnpm", ["run", "build"], { cwd: work });
+  execFileSync("pnpm", ["run", "build"], { cwd: work, shell: true });
   const built = await import(
     pathToFileURL(join(work, "dist", "index.js")).href
   );
