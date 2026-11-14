@@ -126,7 +126,7 @@ export class ProoflineClient extends Operations {
         throw protocol("the review page has no typed collection metadata");
       for (const item of page.items) {
         if (count >= maxItems)
-          throw protocol("the review collection exceeds maxItems");
+          throw paginationLimit("the review collection exceeds maxItems");
         count += 1;
         yield item;
       }
@@ -146,7 +146,7 @@ export class ProoflineClient extends Operations {
       seen.add(page.next_cursor);
       cursor = page.next_cursor;
     }
-    throw protocol("the review collection exceeds maxPages");
+    throw paginationLimit("the review collection exceeds maxPages");
   }
 
   async waitForReview(
@@ -227,6 +227,11 @@ import { ProoflineError } from "./transport.js";
 
 function protocol(detail: string): ProoflineError {
   return new ProoflineError(0, "urn:proofline:sdk:invalid-response", detail);
+}
+
+// A caller's bound, not a server fault: the collection continues past it.
+function paginationLimit(detail: string): ProoflineError {
+  return new ProoflineError(0, "urn:proofline:sdk:pagination-limit", detail);
 }
 
 function integerLimit(value: number, name: string): number {

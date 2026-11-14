@@ -1275,11 +1275,15 @@ test("pagination keeps filters and refuses cycles, incomplete metadata and resou
   mode = "normal";
   await assert.rejects(
     Array.fromAsync(client.iterReviews(parameters, { maxPages: 1 })),
-    (error) => error.type === "urn:proofline:sdk:invalid-response",
+    (error) =>
+      error instanceof ProoflineError &&
+      error.type === "urn:proofline:sdk:pagination-limit",
   );
   await assert.rejects(
     Array.fromAsync(client.iterReviews(parameters, { maxItems: 1 })),
-    (error) => error.type === "urn:proofline:sdk:invalid-response",
+    (error) =>
+      error instanceof ProoflineError &&
+      error.type === "urn:proofline:sdk:pagination-limit",
   );
   mode = "malformed";
   await assert.rejects(
