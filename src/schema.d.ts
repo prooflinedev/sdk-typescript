@@ -745,6 +745,24 @@ export interface components {
          *      the change: only `COMPLETED` says the assessment covered what it read.
          */
         CodeAssessmentStatus: ("PENDING" | "RUNNING" | "COMPLETED" | "INCOMPLETE") | "EXCLUDED";
+        /**
+         * @description What a code assessment had read when its head's spending ceiling stopped
+         *      it. A rerun of the same commit runs under the same ceiling.
+         */
+        CodeCeilingStop: {
+            /**
+             * Format: uint
+             * @description The distinct files the reviewed change touched.
+             */
+            changed_files: number;
+            /**
+             * @description The changed files of each part of the change the ceiling stopped or
+             *      never reached, in review order. The assessment may have read some of
+             *      their changed lines, so this lists files it did not finish. Empty
+             *      when the ceiling stopped it after every part was read.
+             */
+            unfinished_paths: string[];
+        };
         /** @description One stored post-merge judgment of a finding comment. */
         CommentAddressEvaluationView: {
             /**
@@ -1035,6 +1053,12 @@ export interface components {
         CustomerCodeAssessment: {
             /** @description The base commit the code assessment compared the head with. */
             base_commit_sha: string;
+            /**
+             * @description How much of the change the code assessment read before its head's
+             *      spending ceiling stopped it. Null for every other ending, and for an
+             *      assessment that recorded no change map.
+             */
+            ceiling_stop?: components["schemas"]["CodeCeilingStop"] | null;
             /**
              * Format: date-time
              * @description When the code assessment ended. Null while it has not.
