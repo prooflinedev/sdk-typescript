@@ -200,12 +200,12 @@ async function decoded(
       data.set(chunk, offset);
       offset += chunk.length;
     }
-    const text = new TextDecoder("utf-8", { fatal: true }).decode(data);
-    if (response.ok) return decode(text, response.headers);
+    const decoder = new TextDecoder("utf-8", { fatal: true });
+    if (response.ok) return decode(decoder.decode(data), response.headers);
     try {
-      return JSON.parse(text) as unknown;
+      return JSON.parse(decoder.decode(data)) as unknown;
     } catch {
-      // A complete HTTP refusal need not carry a JSON Problem to be retryable.
+      // A complete HTTP refusal need not carry a UTF-8 JSON Problem to be retryable.
       return undefined;
     }
   } catch (error) {
