@@ -1,6 +1,6 @@
 {
   "name": "@proofline/sdk",
-  "version": "5.6.0",
+  "version": "5.6.1",
   "description": "Typed clients for the token-scoped Proofline review API",
   "type": "module",
   "license": "Apache-2.0",
@@ -29,8 +29,8 @@
   ],
   "scripts": {
     "generate": "openapi-typescript openapi.public.json --default-non-nullable=false -o src/schema.d.ts && node generate.mjs",
-    "build": "node -e \"require('node:fs').rmSync('dist', {recursive: true, force: true})\" && tsc && node -e \"const fs=require('node:fs'); fs.copyFileSync('src/schema.d.ts', 'dist/schema.d.ts')\"",
-    "typecheck": "tsc --noEmit",
+    "build": "node -e \"require('node:fs').rmSync('dist', {recursive: true, force: true})\" && node node_modules/@typescript/native/bin/tsc && node -e \"const fs=require('node:fs'); fs.copyFileSync('src/schema.d.ts', 'dist/schema.d.ts')\"",
+    "typecheck": "node node_modules/@typescript/native/bin/tsc --noEmit",
     "test": "node --test tests/*.test.mjs",
     "lint": "biome check src tests generate.mjs check-claims.mjs",
     "prepack": "pnpm build"
@@ -38,6 +38,7 @@
   "devDependencies": {
     "@biomejs/biome": "2.4.8",
     "@types/node": "22.19.11",
+    "@typescript/native": "npm:typescript@7.0.2",
     "openapi-typescript": "7.13.0",
     "typescript": "5.9.3"
   },

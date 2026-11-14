@@ -1,6 +1,6 @@
 import type { components } from "./schema.js";
 
-const VERSION = "5.6.0";
+const VERSION = "5.6.1";
 const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
 const MAX_RETRIES = 3;
 const MAX_RETRY_SECONDS = 60;
