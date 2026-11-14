@@ -2350,7 +2350,7 @@ export interface components {
              *      by an earlier identical request keeps the source it recorded.
              * @default null
              */
-            trigger_source: components["schemas"]["PatchTriggerSource"] | null;
+            trigger_source?: components["schemas"]["PatchTriggerSource"] | null;
             /**
              * @description Open findings of one pull request in this repository to re-verify
              *      against the patch, at most 20. The review re-investigates each one
@@ -2361,7 +2361,7 @@ export interface components {
              *      counted with those a coding agent makes through MCP.
              * @default []
              */
-            verify_finding_ids: string[];
+            verify_finding_ids?: string[];
         };
         /** @description What a patch review request produced. */
         PatchReviewResponse: {
