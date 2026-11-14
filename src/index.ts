@@ -19,10 +19,21 @@ import {
 export type { ExportPage, ExportParameters } from "./exports.js";
 
 import { type ListReviewsParameters, Operations } from "./operations.js";
+import { type SarifLog, sarifLog } from "./sarif.js";
 import type { components } from "./schema.js";
 import { type ClientOptions, sleep, Transport } from "./transport.js";
 
 export type * from "./operations.js";
+export type {
+  SarifEvidenceReference,
+  SarifLevel,
+  SarifLocation,
+  SarifLocationStatus,
+  SarifLog,
+  SarifNotification,
+  SarifResult,
+  SarifRun,
+} from "./sarif.js";
 export type { components, operations, paths } from "./schema.js";
 export type {
   ClientOptions,
@@ -223,6 +234,21 @@ export class ProoflineClient extends Operations {
   }
 }
 
+/**
+ * Projects the outcome of `waitForReview` for a pull-request review into the
+ * SARIF 2.1.0 document that the CLI writes with `--sarif`.
+ */
+export function reviewSarif(
+  outcome: ReviewOutcome,
+  organizationId: string,
+): SarifLog {
+  return sarifLog(
+    outcome,
+    organizationId,
+    outcome.review && recordedCode(outcome.review),
+  );
+}
+
 import { ProoflineError } from "./transport.js";
 
 function protocol(detail: string): ProoflineError {
@@ -380,6 +406,12 @@ function codeAssessment(review: Review): CodeAssessment | null {
   // A CODE result cannot replace a missing ENV result or its check receipts.
   if (review.assessment_count !== 0 || review.assessments.length !== 0)
     return null;
+  return recordedCode(review);
+}
+
+// The CODE record, only when it is of this review's commits and its findings
+// are published. It can stand beside environment assessments.
+function recordedCode(review: Review): CodeAssessment | null {
   const code = review.code_assessment;
   if (
     !isObject(code) ||

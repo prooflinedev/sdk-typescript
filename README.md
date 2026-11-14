@@ -74,6 +74,25 @@ process.stdout.write(page.text);
 // Continue with query.cursor = page.nextCursor when it is not null.
 ```
 
+## SARIF export
+
+`reviewSarif` projects the outcome of `waitForReview` into the SARIF 2.1.0 document that `proofline findings --sarif` writes, for SARIF consumers such as GitHub code scanning. It makes no request and reads only the outcome it is given.
+
+```typescript
+import { writeFile } from "node:fs/promises";
+import { reviewSarif } from "@proofline/sdk";
+
+const outcome = await client.waitForReview(organizationId, reviewId);
+const sarif = reviewSarif(outcome, organizationId);
+await writeFile("proofline.sarif", JSON.stringify(sarif));
+```
+
+`SERIOUS` findings become `error` results and `WARNING` findings become `warning` results, with the risk domain as the rule. A result's location is the first cited file that a verified repository read recorded at the reviewed head commit; later distinct files are `relatedLocations`. Every other citation stays in `properties.evidenceReferences` with a `locationStatus` such as `DIFFERENT_COMMIT` or `COMPANION_REPOSITORY`. CODE findings are exported only from a CODE record of the review's own commits. A finding with no such file keeps an empty `locations` list and the `locationStatus` `NO_VERIFIED_REVIEWED_LOCATION`; GitHub code scanning rejects an upload that contains a result without a location.
+
+Each gap in the outcome becomes a `toolExecutionNotifications` entry, and `executionSuccessful` is `true` only for a `COMPLETED` outcome with no notification. An empty `results` list from an unsuccessful run is not a complete result. A wait that timed out exports the last review it read with `REVIEW_IN_PROGRESS`.
+
+The export throws `ProoflineError` with the type `urn:proofline:sdk:sarif-refused` and returns no document for a review that is not of a pull request, a head that is not a full commit SHA, or a finding whose severity or risk domain this SDK version does not know. It throws `TypeError` for an outcome that retains no review. The document copies no raw API fields or evidence values.
+
 ## MCP organization selection
 
 With an MCP OAuth credential approved for several organizations, call `client.mcp.listOrganizations()` to discover its currently authorized targets. The `KnowledgeResult` retains `isError` and `structuredContent.data.organizations`; each organization entry contains `organization_id`, `github_login`, and `scopes`.
