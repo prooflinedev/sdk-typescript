@@ -510,9 +510,16 @@ test("reads honor bounded Retry-After and mutations make one attempt", async (t)
   }
 });
 
+const invalidUtf8Body = Buffer.concat([
+  Buffer.from(`<html>${responseCanary} ${token}`),
+  Buffer.from([0xff]),
+  Buffer.from("</html>"),
+]);
+
 const refusalBodies = [
   ["empty", "", "application/json"],
   ["HTML", `<html>${responseCanary} ${token}</html>`, "text/html"],
+  ["invalid UTF-8", invalidUtf8Body, "text/html"],
   [
     "malformed JSON",
     `{"detail":"${responseCanary} ${token}`,
@@ -520,7 +527,7 @@ const refusalBodies = [
   ],
 ];
 
-test("reads retry empty, HTML and malformed JSON refusals before decoding success", async (t) => {
+test("reads retry undecodable refusals before decoding success", async (t) => {
   for (const status of [429, 503]) {
     for (const [name, body, contentType] of refusalBodies) {
       await t.test(`${status} ${name}`, async (t) => {
@@ -879,41 +886,130 @@ test("refusal retries preserve response bounds and the caller deadline", async (
   assert.equal(fixture.calls.length - before, 1);
 });
 
+test("invalid UTF-8 never hides successful-body or incomplete-body failures", async (t) => {
+  for (const status of [200, 429, 503]) {
+    for (const mode of [
+      "complete",
+      "oversized",
+      "truncated",
+      "interrupted",
+      "stalled",
+    ]) {
+      if (status !== 200 && mode === "complete") continue;
+      await t.test(`${status} ${mode}`, async (t) => {
+        const fixture = await server(t, (_, response) => {
+          response.writeHead(status, {
+            "Content-Type": "application/json",
+            "Retry-After": "0",
+            ...(mode === "truncated"
+              ? {
+                  "Content-Length": String(invalidUtf8Body.length + 100),
+                  Connection: "close",
+                }
+              : {}),
+          });
+          if (mode === "oversized")
+            return response.end(Buffer.alloc(8 * 1024 * 1024 + 1, 0xff));
+          if (mode === "stalled") return response.write(invalidUtf8Body);
+          if (mode === "interrupted") {
+            // End the TCP stream without terminating the chunked HTTP body.
+            response.write(invalidUtf8Body, () => response.socket.end());
+            return;
+          }
+          response.end(invalidUtf8Body);
+        });
+        const client = new ProoflineClient({
+          baseUrl: fixture.baseUrl,
+          token,
+          requestTimeoutMs: mode === "stalled" ? 100 : 5_000,
+        });
+        await assert.rejects(
+          client.getReview({ path: { org_id: orgId, review_id: reviewId } }),
+          (error) => {
+            assert(error instanceof ProoflineError);
+            const timeout = status === 200 && mode === "stalled";
+            assert.equal(error.status, timeout ? 0 : status);
+            assert.equal(
+              error.type,
+              timeout
+                ? "urn:proofline:sdk:transport"
+                : "urn:proofline:sdk:invalid-response",
+            );
+            if (mode === "oversized")
+              assert.equal(error.detail, "the response exceeds 8 MiB");
+            assert(!error.detail.includes(token));
+            assert(!error.detail.includes(responseCanary));
+            return true;
+          },
+        );
+        assert.equal(fixture.calls.length, 1);
+      });
+    }
+  }
+});
+
+test("review waits recover from invalid UTF-8 refusals and retain retry deadlines", async (t) => {
+  for (const status of [429, 503]) {
+    for (const retryAfter of ["0", "60"]) {
+      await t.test(`${status} Retry-After ${retryAfter}`, async (t) => {
+        const fixture = await server(t, (_, response, calls) => {
+          if (calls.length === 1) {
+            response.writeHead(status, { "Retry-After": retryAfter });
+            return response.end(invalidUtf8Body);
+          }
+          json(response, 200, review());
+        });
+        const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
+        const result = await client.waitForReview(orgId, reviewId, {
+          timeoutMs: 5_000,
+        });
+        assert.equal(
+          result.status,
+          retryAfter === "0" ? "COMPLETED" : "TIMED_OUT",
+        );
+        assert.equal(fixture.calls.length, retryAfter === "0" ? 2 : 1);
+      });
+    }
+  }
+});
+
 test("export reads retry non-JSON refusals independently of the successful format", async (t) => {
   for (const format of ["csv", "ndjson"]) {
-    await t.test(format, async (t) => {
-      const fixture = await server(t, (_, response, calls) => {
-        if (calls.length === 1) {
-          response.writeHead(503, {
-            "Content-Type": "text/html",
-            "Retry-After": "0",
+    for (const [name, body, contentType] of refusalBodies) {
+      await t.test(`${format} ${name}`, async (t) => {
+        const fixture = await server(t, (_, response, calls) => {
+          if (calls.length === 1) {
+            response.writeHead(503, {
+              "Content-Type": contentType,
+              "Retry-After": "0",
+            });
+            return response.end(body);
+          }
+          response.writeHead(200, {
+            "Content-Type":
+              format === "csv" ? "text/csv" : "application/x-ndjson",
+            "X-Proofline-Export-Version": "1",
+            "X-Proofline-Export-Settled-Until": "2026-10-25T00:00:00Z",
           });
-          return response.end(`<html>${responseCanary}</html>`);
-        }
-        response.writeHead(200, {
-          "Content-Type":
-            format === "csv" ? "text/csv" : "application/x-ndjson",
-          "X-Proofline-Export-Version": "1",
-          "X-Proofline-Export-Settled-Until": "2026-10-25T00:00:00Z",
+          response.end(
+            format === "csv"
+              ? "dataset_version,claim\r\n1,hello\r\n"
+              : '{"dataset_version":1,"claim":"hello"}\n',
+          );
         });
-        response.end(
-          format === "csv"
-            ? "dataset_version,claim\r\n1,hello\r\n"
-            : '{"dataset_version":1,"claim":"hello"}\n',
-        );
+        const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
+        const page = await client.exportReviews({
+          path: { org_id: orgId, dataset: "findings" },
+          query: {
+            from: "2026-10-01T00:00:00Z",
+            to: "2026-10-25T00:00:00Z",
+            format,
+          },
+        });
+        assert.equal(page.rows[0].claim, "hello");
+        assert.equal(fixture.calls.length, 2);
       });
-      const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
-      const page = await client.exportReviews({
-        path: { org_id: orgId, dataset: "findings" },
-        query: {
-          from: "2026-10-01T00:00:00Z",
-          to: "2026-10-25T00:00:00Z",
-          format,
-        },
-      });
-      assert.equal(page.rows[0].claim, "hello");
-      assert.equal(fixture.calls.length, 2);
-    });
+    }
   }
 });
 
