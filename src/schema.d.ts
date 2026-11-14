@@ -2568,7 +2568,7 @@ export interface components {
             reason_code?: string | null;
             /**
              * Format: uuid
-             * @description The first review captured for this gate. Null when its trigger was refused before a review existed.
+             * @description The review the gate decides from: the first review captured, or the one retry that replaced a review that could not finish. Null when its trigger was refused before a review existed.
              */
             review_id?: string | null;
             /** @description The current gate projection, including a recorded bypass or supersession by a newer head. */

@@ -1405,7 +1405,7 @@ test("review exports retain every recorded kind in both formats", async (t) => {
         ? "dataset_version,kind\r\n" +
             kinds.map((kind) => `1,${kind}\r\n`).join("")
         : kinds
-            .map((kind) => JSON.stringify({ dataset_version: 1, kind }) + "\n")
+            .map((kind) => `${JSON.stringify({ dataset_version: 1, kind })}\n`)
             .join(""),
     );
   });

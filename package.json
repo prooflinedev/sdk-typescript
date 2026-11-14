@@ -1,6 +1,6 @@
 {
   "name": "@proofline/sdk",
-  "version": "5.7.0",
+  "version": "5.7.1",
   "description": "Typed clients for the token-scoped Proofline review API",
   "type": "module",
   "license": "Apache-2.0",
@@ -36,8 +36,8 @@
     "prepack": "pnpm build"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.4.8",
-    "@types/node": "22.19.11",
+    "@biomejs/biome": "2.6.7",
+    "@types/node": "22.20.5",
     "@typescript/native": "npm:typescript@7.0.2",
     "openapi-typescript": "7.13.0",
     "typescript": "5.9.3"
