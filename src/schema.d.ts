@@ -1623,6 +1623,12 @@ export interface components {
              * @description One-based, append-only ordinal within one repository pull request.
              */
             run_number?: number | null;
+            /**
+             * @description Where an unfinished review's runs stand: running, queued for a worker,
+             *      waiting for a scheduled step, or due again after an attempt that did
+             *      not finish. Null once the review has ended.
+             */
+            run_progress?: components["schemas"]["RunProgress"] | null;
             /** @description The review's lifecycle status: `PENDING`, `RUNNING`, `COMPLETED`, `INCOMPLETE`, `FAILED`, `SUPERSEDED`, `STOPPED` or `EXCLUDED`. */
             status: string;
             /**
@@ -3279,6 +3285,34 @@ export interface components {
              */
             run_number: number;
         };
+        /** @description Where an unfinished review's runs stand. */
+        RunProgress: {
+            /**
+             * Format: int32
+             * @description Attempts begun by the run in `state`, counting worker claims.
+             */
+            attempts: number;
+            /**
+             * Format: date-time
+             * @description When the run in `state` is due: in the past for `QUEUED`, the next
+             *      attempt for `RETRY_SCHEDULED` and the next check for `WAITING`. Null
+             *      for `RUNNING`.
+             */
+            due_at?: string | null;
+            /**
+             * Format: date-time
+             * @description When any of the review's runs last recorded a completed step. Null
+             *      before the first.
+             */
+            last_progress_at?: string | null;
+            /**
+             * @description The most telling state among the review's unfinished runs: a scheduled
+             *      retry, then a running worker, then a queued run, then a wait.
+             */
+            state: components["schemas"]["RunProgressState"];
+        };
+        /** @description What an unfinished review's runs are doing now. */
+        RunProgressState: "WAITING" | "QUEUED" | "RUNNING" | "RETRY_SCHEDULED";
         /** @description One request to scan a ref or an exact commit of the repository. */
         ScanRequestBody: {
             /**
