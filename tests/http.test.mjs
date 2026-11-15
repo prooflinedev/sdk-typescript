@@ -1648,11 +1648,21 @@ test("shared review outcome contract", async (t) => {
     requests += 1;
     json(response, 200, pending && requests > 1 ? settled : body);
   });
+  // A pending case polls again after the client's first 5,000 ms interval.
+  // The wait is recorded and taken at once; every other timer runs as set.
+  const original = globalThis.setTimeout;
+  let waits;
+  t.mock.method(globalThis, "setTimeout", (callback, delay, ...rest) => {
+    if (delay !== 5_000) return original(callback, delay, ...rest);
+    waits.push(delay);
+    return original(callback, 0, ...rest);
+  });
   const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
   for (const item of contract.cases) {
     body = item.review;
     pending = item.outcome === null;
     requests = 0;
+    waits = [];
     const result = await client.waitForReview(orgId, body.id);
     assert.equal(
       result.status,
@@ -1660,6 +1670,7 @@ test("shared review outcome contract", async (t) => {
       item.name,
     );
     assert.equal(requests, pending ? 2 : 1, item.name);
+    assert.deepEqual(waits, pending ? [5_000] : [], item.name);
     assert.deepEqual(
       result.gaps.map((gap) => ({
         assessment_id: gap.assessmentId || null,
