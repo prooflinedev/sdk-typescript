@@ -74,7 +74,7 @@ export class ProoflineClient extends Operations {
   readonly knowledge: KnowledgeClient;
   readonly fixes: FixesClient;
 
-  constructor(options: ClientOptions) {
+  constructor(options: ClientOptions = {}) {
     const transport = new Transport(options);
     super((method, path, parameters, body) =>
       transport.request(method, path, parameters, undefined, body),

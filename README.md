@@ -15,7 +15,7 @@ const client = new ProoflineClient({
 });
 ```
 
-When no token is passed, the client reads `PROOFLINE_TOKEN`, keeps it in memory, and redacts it from diagnostic output. The [SDK guide](https://proofline.sh/docs/sdks/) and [API reference](https://proofline.sh/docs/api/) cover every operation.
+When no token is passed, the client reads `PROOFLINE_TOKEN`, keeps it in memory, and redacts it from diagnostic output. When no `baseUrl` is passed, it reads `PROOFLINE_BASE_URL` and otherwise uses `https://proofline.sh`, as the CLI and the MCP bridge do, so `new ProoflineClient()` works for the hosted service. An empty variable counts as unset, and a value that is not an HTTPS origin or a loopback HTTP origin is refused by name. The [SDK guide](https://proofline.sh/docs/sdks/) and [API reference](https://proofline.sh/docs/api/) cover every operation.
 
 This repository is the published distribution of the Proofline TypeScript SDK. The public OpenAPI contract in `openapi.public.json` generates `src/operations.ts` and `src/schema.d.ts`. The transport in `src/transport.ts`, client helpers, and tests in `tests/` are hand-written. Open an [issue](https://github.com/prooflinedev/sdk-typescript/issues) for changes to the OpenAPI contract, generated code, or workflows. Pull requests are welcome for the hand-written parts.
 
