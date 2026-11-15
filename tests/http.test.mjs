@@ -1237,6 +1237,387 @@ test("the wait timeout includes an in-flight request and returns the retained re
   }
 });
 
+const otherFindingId = "00000000-0000-7000-8000-000000000008";
+const letteredFindingId = "0a1b2c3d-0000-7000-8000-00000000000e";
+const unlistedFindingId = "00000000-0000-7000-8000-000000000009";
+const notListed = "the review lists no re-verification of this finding";
+const unknownOutcome = "the review recorded an outcome this SDK does not know";
+
+function reverified(outcome, id = findingId, iteration = 1, checks = []) {
+  return { finding_id: id, iteration, outcome, checks };
+}
+
+function patchReview(status, reverifications) {
+  return {
+    ...review(status),
+    kind: "PATCH",
+    local_reverifications: reverifications,
+  };
+}
+
+test("local re-verification returns one recorded outcome for each named finding, in the order named", async (t) => {
+  const checks = [{ name: "Queue ordering", outcome: "READY" }];
+  const body = patchReview("COMPLETED", [
+    // Listed by the review and not named by the caller.
+    reverified("STILL_PRESENT", assessmentId),
+    reverified("RESOLVED_VERIFIED", findingId, 2, checks),
+    reverified("STILL_PRESENT", letteredFindingId, 3),
+    reverified("NOT_VERIFIED", otherFindingId),
+  ]);
+  const fixture = await server(t, (_, response) => json(response, 200, body));
+  const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
+  const result = await client.waitForLocalReverification(orgId, reviewId, [
+    letteredFindingId.toUpperCase(),
+    otherFindingId,
+    findingId,
+  ]);
+  assert.deepEqual(result.reverifications, [
+    {
+      findingId: letteredFindingId.toUpperCase(),
+      outcome: "STILL_PRESENT",
+      iteration: 3,
+      checks: [],
+      reason: null,
+    },
+    {
+      findingId: otherFindingId,
+      outcome: "NOT_VERIFIED",
+      iteration: 1,
+      checks: [],
+      reason: null,
+    },
+    {
+      findingId,
+      outcome: "RESOLVED_VERIFIED",
+      iteration: 2,
+      checks,
+      reason: null,
+    },
+  ]);
+  assert.equal(result.status, "COMPLETED");
+  assert.equal(
+    result.reviewUrl,
+    `${fixture.baseUrl}/orgs/by-id/${orgId}/reviews/${reviewId}`,
+  );
+  assert.deepEqual(result.gaps, []);
+  assert.equal(result.reason, null);
+  assert.deepEqual(
+    result.review.local_reverifications,
+    body.local_reverifications,
+  );
+  assert.deepEqual(
+    fixture.calls.map(({ method, url }) => [method, url]),
+    [["GET", `/api/v1/organizations/${orgId}/reviews/${reviewId}`]],
+  );
+});
+
+test("a settled local re-verification gives NOT_VERIFIED and a reason for every finding the review did not answer", async (t) => {
+  let body;
+  const fixture = await server(t, (_, response) => json(response, 200, body));
+  const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
+  for (const status of ["COMPLETED", "INCOMPLETE", "FAILED", "STOPPED"]) {
+    for (const list of [
+      undefined,
+      null,
+      [],
+      [reverified("RESOLVED_VERIFIED", otherFindingId)],
+    ]) {
+      body = patchReview(status, list);
+      if (list === undefined) delete body.local_reverifications;
+      const result = await client.waitForLocalReverification(orgId, reviewId, [
+        findingId,
+      ]);
+      assert.equal(result.status, status);
+      assert.deepEqual(result.reverifications, [
+        {
+          findingId,
+          outcome: "NOT_VERIFIED",
+          iteration: null,
+          checks: null,
+          reason: notListed,
+        },
+      ]);
+    }
+  }
+  const checks = [{ name: "Queue ordering", outcome: "UNRESOLVED" }];
+  for (const [outcome, reason] of [
+    ["FUTURE_OUTCOME", unknownOutcome],
+    ["PENDING", "the review ended while this finding was pending"],
+  ]) {
+    body = patchReview("COMPLETED", [
+      reverified(outcome, findingId, 2, checks),
+    ]);
+    const result = await client.waitForLocalReverification(orgId, reviewId, [
+      findingId,
+    ]);
+    assert.deepEqual(result.reverifications, [
+      { findingId, outcome: "NOT_VERIFIED", iteration: 2, checks, reason },
+    ]);
+  }
+});
+
+test("a local re-verification wait that times out keeps recorded outcomes and gives PENDING for the rest", async (t) => {
+  const body = patchReview("RUNNING", [
+    reverified("PENDING"),
+    reverified("RESOLVED_VERIFIED", otherFindingId, 2),
+    reverified("FUTURE_OUTCOME", letteredFindingId, 3),
+  ]);
+  const fixture = await server(t, (_, response) => json(response, 200, body));
+  const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
+  const named = [
+    findingId,
+    otherFindingId,
+    letteredFindingId,
+    unlistedFindingId,
+  ];
+  const result = await client.waitForLocalReverification(
+    orgId,
+    reviewId,
+    named,
+    { timeoutMs: 80 },
+  );
+  assert.equal(result.status, "TIMED_OUT");
+  assert.equal(result.review.status, "RUNNING");
+  assert.deepEqual(result.reverifications, [
+    { findingId, outcome: "PENDING", iteration: 1, checks: [], reason: null },
+    {
+      findingId: otherFindingId,
+      outcome: "RESOLVED_VERIFIED",
+      iteration: 2,
+      checks: [],
+      reason: null,
+    },
+    {
+      findingId: letteredFindingId,
+      outcome: "PENDING",
+      iteration: 3,
+      checks: [],
+      reason: unknownOutcome,
+    },
+    {
+      findingId: unlistedFindingId,
+      outcome: "PENDING",
+      iteration: null,
+      checks: null,
+      reason: notListed,
+    },
+  ]);
+  const before = fixture.calls.length;
+  const unread = await client.waitForLocalReverification(
+    orgId,
+    reviewId,
+    named,
+    { timeoutMs: 0 },
+  );
+  assert.equal(unread.status, "TIMED_OUT");
+  assert.equal(unread.review, null);
+  assert.deepEqual(
+    unread.reverifications,
+    named.map((id) => ({
+      findingId: id,
+      outcome: "PENDING",
+      iteration: null,
+      checks: null,
+      reason: "the review was not read before the wait ended",
+    })),
+  );
+  assert.equal(fixture.calls.length, before);
+});
+
+test("a pending local re-verification is read again until the review settles", async (t) => {
+  let requests = 0;
+  const fixture = await server(t, (_, response) => {
+    requests += 1;
+    json(
+      response,
+      200,
+      requests === 1
+        ? patchReview("RUNNING", [reverified("PENDING")])
+        : patchReview("COMPLETED", [reverified("RESOLVED_VERIFIED")]),
+    );
+  });
+  // The second read follows the client's first 5,000 ms interval, which is
+  // recorded and taken at once; every other timer runs as set.
+  const original = globalThis.setTimeout;
+  const waits = [];
+  t.mock.method(globalThis, "setTimeout", (callback, delay, ...rest) => {
+    if (delay !== 5_000) return original(callback, delay, ...rest);
+    waits.push(delay);
+    return original(callback, 0, ...rest);
+  });
+  const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
+  const named = [findingId];
+  const waiting = client.waitForLocalReverification(orgId, reviewId, named);
+  // The names are bound when the wait starts, not when it ends.
+  named[0] = otherFindingId;
+  named.push(unlistedFindingId);
+  const result = await waiting;
+  assert.equal(result.status, "COMPLETED");
+  assert.deepEqual(result.reverifications, [
+    {
+      findingId,
+      outcome: "RESOLVED_VERIFIED",
+      iteration: 1,
+      checks: [],
+      reason: null,
+    },
+  ]);
+  assert.equal(requests, 2);
+  assert.deepEqual(waits, [5_000]);
+});
+
+test("malformed local re-verifications are refused without their body", async (t) => {
+  let body;
+  const fixture = await server(t, (_, response) => json(response, 200, body));
+  const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
+  const entry = reverified("RESOLVED_VERIFIED", findingId, 1, responseCanary);
+  for (const list of [
+    responseCanary,
+    { [findingId]: entry },
+    [null],
+    [responseCanary],
+    [[entry]],
+    [{ ...entry, finding_id: 7 }],
+    [{ ...entry, finding_id: "" }],
+    [{ ...entry, iteration: "1" }],
+    [{ ...entry, iteration: 0 }],
+    [{ ...entry, iteration: 1.5 }],
+    [{ ...entry, outcome: null }],
+    [{ ...entry, outcome: ["RESOLVED_VERIFIED"] }],
+    [entry, entry],
+    [entry, { ...entry, outcome: "STILL_PRESENT" }],
+    // A malformed entry for another finding still refuses the whole list.
+    [
+      entry,
+      reverified("STILL_PRESENT", letteredFindingId),
+      reverified("RESOLVED_VERIFIED", letteredFindingId.toUpperCase()),
+    ],
+  ]) {
+    body = patchReview("COMPLETED", list);
+    await assert.rejects(
+      client.waitForLocalReverification(orgId, reviewId, [findingId]),
+      (error) => {
+        assert(error instanceof ProoflineError);
+        assert.equal(error.status, 0);
+        assert.equal(error.type, "urn:proofline:sdk:invalid-response");
+        for (const text of [
+          error.detail,
+          inspect(error),
+          String(error),
+          JSON.stringify(error),
+        ]) {
+          assert(!text.includes(responseCanary));
+        }
+        return true;
+      },
+    );
+  }
+});
+
+test("local re-verification refuses unusable finding names before any request and keeps the wait's refusals", async (t) => {
+  let status = 200;
+  const fixture = await server(t, (_, response) =>
+    status === 200
+      ? json(
+          response,
+          200,
+          patchReview("COMPLETED", [reverified("RESOLVED_VERIFIED")]),
+        )
+      : json(
+          response,
+          status,
+          { title: "not found", status, detail: "no such review" },
+          { "Content-Type": "application/problem+json" },
+        ),
+  );
+  const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
+  for (const findingIds of [
+    undefined,
+    null,
+    findingId,
+    [],
+    [7],
+    [""],
+    [findingId, null],
+    [findingId, findingId],
+    [letteredFindingId, letteredFindingId.toUpperCase()],
+  ]) {
+    await assert.rejects(
+      client.waitForLocalReverification(orgId, reviewId, findingIds),
+      TypeError,
+    );
+  }
+  for (const timeoutMs of [-1, Number.NaN, Number.POSITIVE_INFINITY]) {
+    await assert.rejects(
+      client.waitForLocalReverification(orgId, reviewId, [findingId], {
+        timeoutMs,
+      }),
+      TypeError,
+    );
+  }
+  assert.equal(fixture.calls.length, 0);
+  status = 404;
+  await assert.rejects(
+    client.waitForLocalReverification(orgId, reviewId, [findingId]),
+    (error) =>
+      error instanceof ProoflineError &&
+      error.status === 404 &&
+      error.detail === "no such review",
+  );
+  assert.equal(fixture.calls.length, 1);
+});
+
+test("public local re-verification types narrow every outcome and refuse a single ID", async (t) => {
+  // Check consumer code against the built public declarations.
+  const work = await mkdtemp(join(tmpdir(), "sdk-reverification-types-"));
+  t.after(() => rm(work, { recursive: true, force: true }));
+  const entry = fileURLToPath(new URL("../dist/index.js", import.meta.url));
+  const fixture = join(work, "consumer.mts");
+  await writeFile(
+    fixture,
+    `
+import type { components, FindingReverification, LocalReverificationResult, ProoflineClient, ReviewOutcome } from ${JSON.stringify(entry)};
+export async function use(client: ProoflineClient, findingIds: readonly string[]): Promise<string[]> {
+  const result: LocalReverificationResult = await client.waitForLocalReverification("org-id", "review-id", findingIds, { timeoutMs: 1_000 });
+  const waited: ReviewOutcome = result;
+  // @ts-expect-error One finding ID is not a list of finding IDs.
+  await client.waitForLocalReverification("org-id", "review-id", "finding-id");
+  return result.reverifications.map((item: FindingReverification) => {
+    const recorded: components["schemas"]["LocalReverificationOutcome"] = item.outcome;
+    const iteration: number | null = item.iteration;
+    const reason: string | null = item.reason;
+    switch (item.outcome) {
+      case "RESOLVED_VERIFIED":
+      case "STILL_PRESENT":
+      case "NOT_VERIFIED":
+      case "PENDING":
+        return [item.findingId, recorded, iteration, reason, waited.status].join(" ");
+      default: {
+        const unreachable: never = item.outcome;
+        return unreachable;
+      }
+    }
+  });
+}
+`,
+  );
+  execFileSync(process.execPath, [
+    fileURLToPath(
+      new URL("../node_modules/typescript/lib/tsc.js", import.meta.url),
+    ),
+    "--noEmit",
+    "--strict",
+    "--exactOptionalPropertyTypes",
+    "--target",
+    "ES2022",
+    "--module",
+    "NodeNext",
+    "--moduleResolution",
+    "NodeNext",
+    fixture,
+  ]);
+});
+
 test("pagination keeps filters and refuses cycles, incomplete metadata and resource bounds", async (t) => {
   let mode = "normal";
   const fixture = await server(t, (request, response) => {

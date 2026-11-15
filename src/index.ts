@@ -18,6 +18,14 @@ import {
 
 export type { ExportPage, ExportParameters } from "./exports.js";
 
+import {
+  type FindingReverification,
+  findingNames,
+  localReverifications,
+} from "./reverifications.js";
+
+export type { FindingReverification } from "./reverifications.js";
+
 import { type ListReviewsParameters, Operations } from "./operations.js";
 import type { components } from "./schema.js";
 import { type ClientOptions, sleep, Transport } from "./transport.js";
@@ -66,6 +74,12 @@ export interface ReviewOutcome {
 
 export interface WaitOptions {
   timeoutMs?: number;
+}
+
+/** A patch review's outcome and the local re-verification of each named finding. */
+export interface LocalReverificationResult extends ReviewOutcome {
+  /** One entry for each named finding, in the order named. */
+  reverifications: FindingReverification[];
 }
 
 export class ProoflineClient extends Operations {
@@ -220,6 +234,29 @@ export class ProoflineClient extends Operations {
       );
       interval = Math.min(interval * 2, 60_000);
     }
+  }
+
+  /**
+   * Waits for a patch review requested with `verify_finding_ids` and returns
+   * one local outcome for each named finding. The outcome is local: the pull
+   * request's findings are unchanged whatever it is.
+   */
+  async waitForLocalReverification(
+    orgId: string,
+    reviewId: string,
+    findingIds: readonly string[],
+    options: WaitOptions = {},
+  ): Promise<LocalReverificationResult> {
+    const named = findingNames(findingIds);
+    const result = await this.waitForReview(orgId, reviewId, options);
+    return {
+      ...result,
+      reverifications: localReverifications(
+        result.review,
+        result.status !== "TIMED_OUT",
+        named,
+      ),
+    };
   }
 }
 
