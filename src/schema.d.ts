@@ -827,6 +827,13 @@ export interface components {
             review_id: string;
         };
         /**
+         * @description What a review is counted under: the cause its assessments recorded, or
+         *      `OUT_OF_CREDITS` where an assessment recorded the credit refusal. An
+         *      assessment's detail names that refusal by the rule `public_reason_codes`
+         *      applies; no other detail is read into the summary.
+         */
+        CountedCause: components["schemas"]["IncompleteCause"] | components["schemas"]["CreditRefusalCause"];
+        /**
          * @description An upload refused for its content: a symbolic or unknown commit, or a
          *      report that cannot be read. Nothing is stored.
          */
@@ -880,6 +887,8 @@ export interface components {
             /** @description The commit the reports tested, as the upload named it. */
             tested_sha: string;
         };
+        /** @description The credit refusal, named apart from the `NOT_CONFIGURED` it records. */
+        CreditRefusalCause: "OUT_OF_CREDITS";
         CustomerAssessment: {
             /** @description The deterministic World checks recorded for this assessment. */
             checks: components["schemas"]["CustomerChecks"];
@@ -1402,6 +1411,13 @@ export interface components {
              *      Null for a caller who is not a member of the organization.
              */
             cost_microcredits?: number | null;
+            /**
+             * @description `incomplete_causes` as the Inbox and the reviews `cause:` search
+             *      count them: `OUT_OF_CREDITS` in place of the `NOT_CONFIGURED` an
+             *      assessment records when credits refused it. Present exactly when
+             *      `incomplete_causes` is.
+             */
+            counted_incomplete_causes?: components["schemas"]["CountedCause"][];
             /**
              * Format: date-time
              * @description When the review was created.
@@ -2900,6 +2916,13 @@ export interface components {
              * @description When the review reached a terminal status. Absent while it is still pending or running.
              */
             completed_at?: string | null;
+            /**
+             * @description `incomplete_causes` as the Inbox and the reviews `cause:` search
+             *      count them: `OUT_OF_CREDITS` in place of the `NOT_CONFIGURED` an
+             *      assessment records when credits refused it. Present exactly when
+             *      `incomplete_causes` is.
+             */
+            counted_incomplete_causes?: components["schemas"]["CountedCause"][];
             /**
              * Format: date-time
              * @description When the review was created.
