@@ -479,6 +479,8 @@ export interface components {
             github_user_id: number;
             /** @description The login they were known by when they acted. Display metadata. */
             login: string;
+            /** @description Profile name resolved for this organization. Display metadata only. */
+            name?: string | null;
             /** @description Their profile on the deployment's GitHub host. */
             profile_url?: string | null;
         };
@@ -1098,8 +1100,9 @@ export interface components {
             incompleteness_kind?: string | null;
             /**
              * @description Public causes of an `INCOMPLETE` code assessment: `OUT_OF_CREDITS`
-             *      when credits refused its model. Absent otherwise; other recorded
-             *      details stay private.
+             *      when credits refused its model, and `MODEL_ANSWER_WITHHELD` when the
+             *      credential mask withheld its model's answer after the source was read.
+             *      Absent otherwise; other recorded details stay private.
              */
             reason_codes?: string[] | null;
             /**
