@@ -1485,6 +1485,12 @@ export interface components {
              *      than the reviews list and a single review.
              */
             incomplete_causes?: components["schemas"]["IncompleteCause"][];
+            /**
+             * @description The supported findings of each environment investigation this review
+             *      published, by assessment in recorded order, including those the
+             *      pull-request Check left off its list. Absent when there are none.
+             */
+            investigation_findings?: components["schemas"]["ReviewInvestigationFinding"][];
             /** @description Present and true when this run is a Deep Review. */
             is_deep_review?: boolean;
             /**
@@ -2776,6 +2782,48 @@ export interface components {
              *      name.
              */
             repositories: components["schemas"]["FilterChoice"][];
+        };
+        /**
+         * @description One environment evidence record a finding cites, as Proofline verified
+         *      it.
+         */
+        ReviewInvestigationCitation: {
+            /**
+             * Format: uuid
+             * @description The evidence collection that holds the record.
+             */
+            collection_id: string;
+            /** @description The record's stored digest. */
+            digest: string;
+            /**
+             * Format: uuid
+             * @description The record's ID.
+             */
+            record_id: string;
+            /** @description The table that holds the record. */
+            table: string;
+        };
+        /** @description One supported finding of an environment investigation. */
+        ReviewInvestigationFinding: {
+            /**
+             * @description What the finding is about: `secrets`, `configuration`, `iam`,
+             *      `network`, `capacity` or `other`.
+             */
+            area: string;
+            /**
+             * Format: uuid
+             * @description The environment assessment whose investigation recorded the finding.
+             */
+            assessment_id: string;
+            /**
+             * @description The evidence records the finding cites, each verified, in the order
+             *      the finding cites them.
+             */
+            citations: components["schemas"]["ReviewInvestigationCitation"][];
+            /** @description Model text with protected values withheld. Render it as plain text. */
+            detail: string;
+            /** @description Model text with protected values withheld. Render it as plain text. */
+            title: string;
         };
         ReviewOpenItems: {
             /**
