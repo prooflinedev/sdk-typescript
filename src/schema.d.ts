@@ -4307,16 +4307,32 @@ export interface operations {
                  *      findings, FAILED/INCOMPLETE/STOPPED execution, or an earlier reviewed commit.
                  */
                 attention?: string | null;
+                /**
+                 * @description `mine` for the caller's own pull requests, or a GitHub user ID. `mine`
+                 *      needs a person's sign-in or token.
+                 */
                 author?: string | null;
                 cursor?: string | null;
                 environment?: string | null;
+                /**
+                 * @description `present` lists reviews with at least one finding; `none` lists reviews
+                 *      with no finding.
+                 */
                 findings?: string | null;
+                /**
+                 * @description One review kind: `PULL_REQUEST`, `DEPLOYMENT`, `PATCH`, `COMMIT`,
+                 *      `FILES`, `MERGE_GROUP` or `REVISION_SCAN`.
+                 */
                 kind?: string | null;
                 limit?: number | null;
                 /** @description Qualifiers, quoted values, AND/OR, groups and minus exclusions. */
                 query?: string | null;
                 repository?: string | null;
                 search?: string | null;
+                /**
+                 * @description One review status: `PENDING`, `RUNNING`, `COMPLETED`, `INCOMPLETE`,
+                 *      `FAILED`, `SUPERSEDED`, `STOPPED` or `EXCLUDED`.
+                 */
                 status?: string | null;
             };
             header?: never;
@@ -4385,16 +4401,32 @@ export interface operations {
                  *      findings, FAILED/INCOMPLETE/STOPPED execution, or an earlier reviewed commit.
                  */
                 attention?: string | null;
+                /**
+                 * @description `mine` for the caller's own pull requests, or a GitHub user ID. `mine`
+                 *      needs a person's sign-in or token.
+                 */
                 author?: string | null;
                 cursor?: string | null;
                 environment?: string | null;
+                /**
+                 * @description `present` lists reviews with at least one finding; `none` lists reviews
+                 *      with no finding.
+                 */
                 findings?: string | null;
+                /**
+                 * @description One review kind: `PULL_REQUEST`, `DEPLOYMENT`, `PATCH`, `COMMIT`,
+                 *      `FILES`, `MERGE_GROUP` or `REVISION_SCAN`.
+                 */
                 kind?: string | null;
                 limit?: number | null;
                 /** @description Qualifiers, quoted values, AND/OR, groups and minus exclusions. */
                 query?: string | null;
                 repository?: string | null;
                 search?: string | null;
+                /**
+                 * @description One review status: `PENDING`, `RUNNING`, `COMPLETED`, `INCOMPLETE`,
+                 *      `FAILED`, `SUPERSEDED`, `STOPPED` or `EXCLUDED`.
+                 */
                 status?: string | null;
             };
             header?: never;

@@ -353,7 +353,9 @@ function terminal(review: Review): ReviewStatus | null {
     return "INCOMPLETE";
   if (review.assessments.length === 0) {
     const code = codeAssessment(review);
-    return code?.status === "COMPLETED" && !code.incompleteness_kind
+    return code?.status === "COMPLETED" &&
+      !code.incompleteness_kind &&
+      !code.reason_codes?.length
       ? "COMPLETED"
       : "INCOMPLETE";
   }
