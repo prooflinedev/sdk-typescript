@@ -1,6 +1,6 @@
 import type { components } from "./schema.js";
 
-const VERSION = "5.11.0";
+const VERSION = "5.11.1";
 const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
 const MAX_RETRIES = 3;
 const MAX_RETRY_SECONDS = 60;
@@ -312,7 +312,9 @@ function problem(
         : // Logged internal errors omit detail; the problem itself still arrived.
           `the server returned the problem "${title}" without a detail`;
   const fields = title === undefined ? {} : { title };
-  if (!("refusal" in body))
+  // The contract types a refusal only as a review request's 400. The 402 a
+  // credit refusal answers is undocumented, so it stays a plain problem.
+  if (status !== 400 || !("refusal" in body))
     return new ProoflineError(status, type, detail, fields);
   const view = refusal(body.refusal);
   if (

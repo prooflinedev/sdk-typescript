@@ -21,7 +21,7 @@ This repository is the published distribution of the Proofline TypeScript SDK. T
 
 ## Errors and refusals
 
-A refused request throws `ProoflineError` with the server problem's `status`, `type`, `title` and `detail`. When a review request creates nothing, the error also carries `refusal`, whose `reason` names the setting to change, such as `NO_LINKED_ENVIRONMENT` or `ENVIRONMENT_NOT_READY`, and `repositoryName`. A refusal that does not match the public contract keeps its status, `title` and `detail` with the type `urn:proofline:sdk:invalid-response` and no `refusal`. The token is redacted from every text field, and `String(error)`, `inspect(error)` and `JSON.stringify(error)` show only the status.
+A refused request throws `ProoflineError` with the server problem's `status`, `type`, `title` and `detail`. When a review request creates nothing, the error also carries `refusal`, whose `reason` names the setting to change, such as `NO_LINKED_ENVIRONMENT` or `ENVIRONMENT_NOT_READY`, and `repositoryName`. A refusal that does not match the public contract keeps its status, `title` and `detail` with the type `urn:proofline:sdk:invalid-response` and no `refusal`. Any other status, such as the 402 a review request answers when credits cannot pay, is a plain problem with no `refusal`. The token is redacted from every text field, and `String(error)`, `inspect(error)` and `JSON.stringify(error)` show only the status.
 
 ```typescript
 import { ProoflineError } from "@proofline/sdk";

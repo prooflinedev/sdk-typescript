@@ -692,6 +692,41 @@ test("a malformed refusal keeps the fixed SDK problem type", async (t) => {
   }
 });
 
+test("a credit refusal keeps the server problem", async (t) => {
+  let body;
+  const fixture = await server(t, (_request, response) =>
+    json(response, 402, body, { "Content-Type": "application/problem+json" }),
+  );
+  const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
+  const path = { org_id: orgId, repo_id: repoId };
+  const views = [
+    { reason: "OUT_OF_CREDITS" },
+    { reason: "PLAN_CREDITS_SPENT", resets: "2026-12-01T00:00:00Z" },
+  ];
+  for (const view of views) {
+    body = {
+      title: "payment required",
+      status: 402,
+      detail: `credits cannot pay for ${token}`,
+      repository_name: "api",
+      refusal: view,
+    };
+    for (const request of reviewRequests) {
+      await assert.rejects(request(client, path), (error) => {
+        assert(error instanceof ProoflineError);
+        assert.equal(error.status, 402);
+        assert.equal(error.type, "about:blank");
+        assert.equal(error.title, "payment required");
+        assert.equal(error.detail, "credits cannot pay for [redacted]");
+        assert.equal(error.refusal, undefined);
+        assert.equal(error.repositoryName, undefined);
+        return true;
+      });
+    }
+  }
+  assert.equal(fixture.calls.length, views.length * reviewRequests.length);
+});
+
 test("a problem without a detail keeps its status and title", async (t) => {
   const fixture = await server(t, (_request, response) =>
     json(

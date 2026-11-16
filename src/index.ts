@@ -303,14 +303,7 @@ function validateReview(
       )
         throw protocol("an assessment gap is malformed");
     }
-    if (
-      assessment.reason_codes !== undefined &&
-      assessment.reason_codes !== null &&
-      (!Array.isArray(assessment.reason_codes) ||
-        !assessment.reason_codes.every(
-          (reason: unknown) => typeof reason === "string",
-        ))
-    )
+    if (!optionalTexts(assessment.reason_codes))
       throw protocol("an assessment reason code is malformed");
     for (const check of assessment.checks.families) {
       if (
@@ -395,7 +388,8 @@ function codeAssessment(review: Review): CodeAssessment | null {
     ) ||
     (code.incompleteness_kind !== null &&
       code.incompleteness_kind !== undefined &&
-      typeof code.incompleteness_kind !== "string")
+      typeof code.incompleteness_kind !== "string") ||
+    !optionalTexts(code.reason_codes)
   )
     return null;
   if (
@@ -409,6 +403,15 @@ function codeAssessment(review: Review): CodeAssessment | null {
   )
     return null;
   return code;
+}
+
+function optionalTexts(value: unknown): boolean {
+  return (
+    value === undefined ||
+    value === null ||
+    (Array.isArray(value) &&
+      value.every((item: unknown) => typeof item === "string"))
+  );
 }
 
 function assessmentReasons(assessment: Assessment): string[] {
@@ -467,13 +470,20 @@ function outcome(
         })),
     }));
   const code = review && codeAssessment(review);
-  if (code && (code.status !== "COMPLETED" || code.incompleteness_kind)) {
+  if (
+    code &&
+    (code.status !== "COMPLETED" ||
+      code.incompleteness_kind ||
+      code.reason_codes?.length)
+  ) {
+    const reasons = [...(code.reason_codes ?? [])];
+    if (code.incompleteness_kind) reasons.push(code.incompleteness_kind);
     gaps.push({
       assessmentId: code.id,
       status: code.status,
       incompletenessKind: code.incompleteness_kind ?? null,
-      reasonCodes: code.incompleteness_kind
-        ? [code.incompleteness_kind]
+      reasonCodes: reasons.length
+        ? reasons
         : ["CODE_ASSESSMENT_STATE_UNAVAILABLE"],
       releaseEvidenceGap: null,
       checks: [],
