@@ -1928,7 +1928,8 @@ export interface components {
             group_by: components["schemas"]["FindingOutcomesGroupBy"];
             /**
              * @description The grouping value: a repository or environment ID, a risk domain, a severity or a
-             *      review kind, as `group_by` selects.
+             *      review kind, as `group_by` selects. Grouped by environment, code-lane findings, which
+             *      belong to no environment, share the key `code_review`.
              */
             key: string;
             /**
@@ -1938,7 +1939,8 @@ export interface components {
             limitations: string[];
             /**
              * @description The group's display name: the repository's full name (or `Repository` and its ID when
-             *      no name is recorded), the environment's display name, or otherwise `key`.
+             *      no name is recorded), the environment's display name (`Code review` for the code-lane
+             *      group), or otherwise `key`.
              */
             name: string;
             /**
