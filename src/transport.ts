@@ -491,7 +491,7 @@ export class Transport {
           response.status !== (notification ? 202 : 200) ||
           response.headers.has("mcp-session-id") ||
           (!notification &&
-            response.headers.get("content-type")?.split(";")[0]?.trim() !==
+            response.headers.get("content-type")?.split(";")[0]?.trim().toLowerCase() !==
               "application/json")
         ) {
           await response.body?.cancel();
