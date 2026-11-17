@@ -1604,6 +1604,103 @@ test("credentials remain on the configured origin and malformed responses carry 
   );
 });
 
+function withEnvironment(t, name, value) {
+  const previous = process.env[name];
+  const restore = () => {
+    if (previous === undefined) delete process.env[name];
+    else process.env[name] = previous;
+  };
+  t.after(restore);
+  const set = (next) => {
+    if (next === undefined) delete process.env[name];
+    else process.env[name] = next;
+  };
+  set(value);
+  return set;
+}
+
+test("a client without a baseUrl reads PROOFLINE_BASE_URL and sends the token there", async (t) => {
+  const fixture = await server(t, (_, response) =>
+    json(response, 200, { id: reviewId }),
+  );
+  withEnvironment(t, "PROOFLINE_BASE_URL", fixture.baseUrl);
+  withEnvironment(t, "PROOFLINE_TOKEN", token);
+  const client = new ProoflineClient();
+  const review = await client.getReview({
+    path: { org_id: orgId, review_id: reviewId },
+  });
+  assert.equal(review.id, reviewId);
+  assert.equal(fixture.calls.length, 1);
+  assert.equal(
+    fixture.calls[0].url,
+    `/api/v1/organizations/${orgId}/reviews/${reviewId}`,
+  );
+  assert.equal(fixture.calls[0].authorization, `Bearer ${token}`);
+});
+
+test("an explicit baseUrl wins over PROOFLINE_BASE_URL", async (t) => {
+  const chosen = await server(t, (_, response) =>
+    json(response, 200, { id: reviewId }),
+  );
+  const ignored = await server(t, (_, response) =>
+    json(response, 200, { id: reviewId }),
+  );
+  withEnvironment(t, "PROOFLINE_BASE_URL", ignored.baseUrl);
+  const client = new ProoflineClient({ baseUrl: chosen.baseUrl, token });
+  await client.getReview({ path: { org_id: orgId, review_id: reviewId } });
+  assert.equal(chosen.calls.length, 1);
+  assert.equal(ignored.calls.length, 0);
+});
+
+test("without a baseUrl or a non-empty PROOFLINE_BASE_URL the client uses https://proofline.sh", async (t) => {
+  const requested = [];
+  const original = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    requested.push(String(url));
+    return new Response(JSON.stringify({ id: reviewId }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  };
+  t.after(() => {
+    globalThis.fetch = original;
+  });
+  const set = withEnvironment(t, "PROOFLINE_BASE_URL", undefined);
+  for (const value of [undefined, ""]) {
+    set(value);
+    const client = new ProoflineClient({ token });
+    await client.getReview({ path: { org_id: orgId, review_id: reviewId } });
+  }
+  assert.deepEqual(requested, [
+    `https://proofline.sh/api/v1/organizations/${orgId}/reviews/${reviewId}`,
+    `https://proofline.sh/api/v1/organizations/${orgId}/reviews/${reviewId}`,
+  ]);
+});
+
+test("an unusable PROOFLINE_BASE_URL is refused by name without echoing its value", (t) => {
+  const set = withEnvironment(t, "PROOFLINE_BASE_URL", undefined);
+  for (const value of [
+    "http://customer.example",
+    "https://user:password-canary@customer.example",
+    "https://customer.example/path",
+    "not a url",
+  ]) {
+    set(value);
+    assert.throws(
+      () => new ProoflineClient({ token }),
+      (error) =>
+        error instanceof TypeError &&
+        error.message.startsWith("PROOFLINE_BASE_URL must be") &&
+        !error.message.includes("password-canary") &&
+        !error.message.includes(value),
+    );
+  }
+  assert.throws(
+    () => new ProoflineClient({ baseUrl: "http://customer.example", token }),
+    (error) => error.message.startsWith("baseUrl must be"),
+  );
+});
+
 test("exports preserve CSV cells, opaque cursors and tenant authorization failures", async (t) => {
   const { baseUrl, calls } = await server(t, (request, response) => {
     if (request.url.includes("cursor=refused"))
