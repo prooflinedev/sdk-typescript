@@ -57,6 +57,20 @@ const report = await client.uploadCoverageReports(
 console.log(report.report_id, report.created);
 ```
 
+To upload reports straight from disk, `uploadCoverageFiles` reads each file as UTF-8 text and names it by its path relative to `root`, which defaults to the working directory. Pass `{ path, name }` to choose a different report name.
+
+```typescript
+const report = await client.uploadCoverageFiles(
+  { path: { org_id: organizationId, repo_id: repositoryId } },
+  {
+    tested_sha: testedCommitSha,
+    files: ["coverage/lcov.info", { path: "go/cover.out", name: "go/coverage.out" }],
+  },
+);
+```
+
+It throws a `TypeError` before sending anything when the SHA is abbreviated, the report count is outside 1 to 50, two reports share a name, a name escapes `root`, a file is not UTF-8 text, or the body would exceed 30 MiB. File system errors such as a missing report are thrown unchanged.
+
 Send 1 to 50 LCOV, Cobertura XML, JaCoCo XML, or Go cover reports in a JSON body of at most 30 MiB. Each report name must be a unique relative path, and content must be the original report text. Repeating an identical upload returns the existing report with `created: false`. An upload receipt records evidence; it does not indicate that a coverage check is met.
 
 ## Review exports

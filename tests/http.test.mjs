@@ -7,6 +7,7 @@ import {
   readFile,
   rm,
   symlink,
+  truncate,
   writeFile,
 } from "node:fs/promises";
 import { createServer } from "node:http";
@@ -355,6 +356,101 @@ test("coverage uploads preserve the tested commit, report text and server refusa
     assert.equal(call.contentType, "application/json");
     assert.deepEqual(JSON.parse(call.body), body);
   }
+});
+
+test("coverage file uploads send report text as written under relative names", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "proofline-coverage-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const lcov = "﻿SF:src/app.ts\r\nDA:1,1\r\nend_of_record\r\n";
+  const go = "mode: set\nexample/main.go:1.1,1.2 1 0\n";
+  await writeFile(join(root, "lcov.info"), lcov);
+  await writeFile(join(root, "go.out"), go);
+  const fixture = await server(t, (_request, response) =>
+    json(response, 201, {
+      report_id: findingId,
+      tested_sha: "c".repeat(40),
+      created: true,
+      formats: ["LCOV", "GO_PROFILE"],
+      instrumented_lines: 2,
+      covered_lines: 1,
+    }),
+  );
+  const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
+  const parameters = { path: { org_id: orgId, repo_id: repoId } };
+  const result = await client.uploadCoverageFiles(parameters, {
+    tested_sha: "c".repeat(40),
+    root,
+    files: [
+      "lcov.info",
+      { path: join(root, "go.out"), name: "go/coverage.out" },
+    ],
+  });
+  assert.equal(result.created, true);
+  assert.equal(fixture.calls.length, 1);
+  assert.equal(
+    fixture.calls[0].url,
+    `/api/v1/organizations/${orgId}/repositories/${repoId}/coverage-reports`,
+  );
+  assert.deepEqual(JSON.parse(fixture.calls[0].body), {
+    tested_sha: "c".repeat(40),
+    reports: [
+      { name: "lcov.info", content: lcov },
+      { name: "go/coverage.out", content: go },
+    ],
+  });
+});
+
+test("coverage file uploads refuse locally what the server would refuse", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "proofline-coverage-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await writeFile(join(root, "lcov.info"), "SF:a.ts\nend_of_record\n");
+  await writeFile(join(root, "report.gz"), Buffer.from([0x1f, 0x8b, 0xff]));
+  await writeFile(join(root, "huge.info"), "");
+  await truncate(join(root, "huge.info"), 30 * 1024 * 1024 + 1);
+  const fixture = await server(t, (_request, response) =>
+    json(response, 500, {}),
+  );
+  const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
+  const parameters = { path: { org_id: orgId, repo_id: repoId } };
+  const sha = "c".repeat(40);
+  const refusals = [
+    [{ tested_sha: "main", files: ["lcov.info"] }, /full 40-character/],
+    [{ tested_sha: "c".repeat(12), files: ["lcov.info"] }, /full 40-character/],
+    [{ tested_sha: sha, files: [] }, /1 to 50/],
+    [{ tested_sha: sha, files: Array(51).fill("lcov.info") }, /1 to 50/],
+    [
+      { tested_sha: sha, files: ["lcov.info", { path: "lcov.info" }] },
+      /unique/,
+    ],
+    [
+      { tested_sha: sha, files: [join(tmpdir(), "outside.info")] },
+      /inside root/,
+    ],
+    [
+      { tested_sha: sha, files: [{ path: "lcov.info", name: "/abs.info" }] },
+      /inside root/,
+    ],
+    [
+      { tested_sha: sha, files: [{ path: "lcov.info", name: "a/../b.info" }] },
+      /inside root/,
+    ],
+    [{ tested_sha: sha, files: ["report.gz"] }, /report\.gz is not UTF-8/],
+    [{ tested_sha: sha, files: ["huge.info"] }, /30 MiB/],
+  ];
+  for (const [upload, message] of refusals)
+    await assert.rejects(
+      client.uploadCoverageFiles(parameters, { root, ...upload }),
+      (error) => error instanceof TypeError && message.test(error.message),
+    );
+  await assert.rejects(
+    client.uploadCoverageFiles(parameters, {
+      tested_sha: sha,
+      root,
+      files: ["absent.info"],
+    }),
+    { code: "ENOENT" },
+  );
+  assert.equal(fixture.calls.length, 0);
 });
 
 test("review reads preserve summaries, withheld prose and exact code identity", async (t) => {
