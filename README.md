@@ -73,6 +73,20 @@ It throws a `TypeError` before sending anything when the SHA is abbreviated, the
 
 Send 1 to 50 LCOV, Cobertura XML, JaCoCo XML, or Go cover reports in a JSON body of at most 30 MiB. Each report name must be a unique relative path, and content must be the original report text. Repeating an identical upload returns the existing report with `created: false`. An upload receipt records evidence; it does not indicate that a coverage check is met.
 
+## Repository scans
+
+`scanRevision` requests a whole-repository scan of a ref or an exact commit with a token that holds `scans:request`. It generates the `request_id` when you omit it and sends the same ID on every attempt. The server answers a repeated ID with its first resolution, so a lost response, 429 or 503 is retried up to three times without starting or paying for a second scan. `requestScan` makes one attempt.
+
+```typescript
+const scan = await client.scanRevision(
+  { path: { org_id: organizationId, repo_id: repositoryId } },
+  { ref: "main", budget_credits: 200 },
+);
+console.log(scan.outcome, scan.review_id);
+```
+
+`outcome` is `CREATED`, `EXISTING` when the ID was already resolved, or `REPOSITORY_UNAVAILABLE`. To retry across processes, such as a rerun CI job, store your own UUID and pass it as `request_id`. A refusal, such as a 400 or a budget above the organization's limit, is not retried.
+
 ## Review exports
 
 `exportReviews` reads one CSV or NDJSON page through the bounded transport. Export tokens require `analytics:read`. Each call returns the original text, decoded rows, dataset version, settled horizon, and an optional next cursor. CSV cells remain strings, including nested JSON cells, while NDJSON retains JSON values. Each CSV page includes its own header.

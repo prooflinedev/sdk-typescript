@@ -437,6 +437,7 @@ export class Transport {
       JSON.parse(text),
     accept = "application/json, application/problem+json",
     mcpPhase?: "initialize" | "notification" | "call",
+    idempotent = false,
   ): Promise<T> {
     const path = Object.entries(parameters.path ?? {}).reduce(
       (value, [key, coordinateValue]) =>
@@ -497,6 +498,12 @@ export class Transport {
             "urn:proofline:sdk:timeout",
             "the review wait deadline expired",
           );
+        // A lost response may hide a recorded request, so only a request the
+        // server deduplicates is sent again.
+        if (idempotent && attempt < MAX_RETRIES) {
+          await sleep(2 ** attempt * 1000);
+          continue;
+        }
         throw new ProoflineError(
           0,
           "urn:proofline:sdk:transport",
@@ -532,7 +539,7 @@ export class Transport {
       const error = problem(response.status, value, this.#token);
       const delay = retryDelay(response.headers.get("Retry-After"), attempt);
       if (
-        method !== "GET" ||
+        (method !== "GET" && !idempotent) ||
         ![429, 503].includes(response.status) ||
         attempt >= MAX_RETRIES ||
         delay === undefined

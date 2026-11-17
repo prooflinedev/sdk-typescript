@@ -25,6 +25,8 @@ export type { ExportPage, ExportParameters } from "./exports.js";
 import {
   type ListReviewsParameters,
   Operations,
+  type RequestScanBody,
+  type RequestScanParameters,
   type UploadCoverageReportsParameters,
 } from "./operations.js";
 import type { components } from "./schema.js";
@@ -73,6 +75,11 @@ export interface ReviewOutcome {
   reason: string | null;
 }
 
+/** A scan request whose `request_id` the SDK generates when it is omitted. */
+export type ScanRevisionBody = Omit<RequestScanBody, "request_id"> & {
+  request_id?: string;
+};
+
 export interface WaitOptions {
   timeoutMs?: number;
 }
@@ -118,6 +125,28 @@ export class ProoflineClient extends Operations {
     return this.uploadCoverageReports(
       parameters,
       await readCoverageFiles(upload),
+    );
+  }
+
+  /**
+   * Requests a scan once per `request_id`, generating one when it is omitted.
+   * The server answers a repeated `request_id` with its first resolution, so a
+   * lost response, 429 or 503 is retried without starting a second scan.
+   */
+  async scanRevision(
+    parameters: RequestScanParameters,
+    body: ScanRevisionBody,
+  ): Promise<components["schemas"]["ScanResponse"]> {
+    return this.#transport.request(
+      "POST",
+      "/api/v1/organizations/{org_id}/repositories/{repo_id}/scans",
+      parameters,
+      undefined,
+      { ...body, request_id: body.request_id ?? crypto.randomUUID() },
+      undefined,
+      undefined,
+      undefined,
+      true,
     );
   }
 
