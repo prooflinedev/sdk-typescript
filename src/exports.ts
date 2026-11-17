@@ -12,6 +12,11 @@ export interface ExportPage {
   nextCursor: string | null;
 }
 
+export interface ExportIteratorOptions {
+  maxPages?: number;
+  maxRows?: number;
+}
+
 function invalid(): never {
   throw new ProoflineError(
     200,
@@ -70,11 +75,13 @@ export function decodeExport(
 ): ExportPage {
   const media = format === "csv" ? "text/csv" : "application/x-ndjson";
   const settledUntil = headers.get("x-proofline-export-settled-until");
+  const nextCursor = headers.get("x-proofline-export-next-cursor");
   if (
     headers.get("content-type")?.split(";")[0]?.trim() !== media ||
     headers.get("x-proofline-export-version") !== "1" ||
     !settledUntil ||
-    !Number.isFinite(Date.parse(settledUntil))
+    !Number.isFinite(Date.parse(settledUntil)) ||
+    (nextCursor !== null && !nextCursor.trim())
   )
     invalid();
   let rows: Record<string, unknown>[];
@@ -101,6 +108,6 @@ export function decodeExport(
     rows,
     version: 1,
     settledUntil,
-    nextCursor: headers.get("x-proofline-export-next-cursor"),
+    nextCursor,
   };
 }

@@ -12,11 +12,16 @@ export type { KnowledgeResult, RepositoryKnowledge } from "./knowledge.js";
 
 import {
   decodeExport,
+  type ExportIteratorOptions,
   type ExportPage,
   type ExportParameters,
 } from "./exports.js";
 
-export type { ExportPage, ExportParameters } from "./exports.js";
+export type {
+  ExportIteratorOptions,
+  ExportPage,
+  ExportParameters,
+} from "./exports.js";
 
 import { type ListReviewsParameters, Operations } from "./operations.js";
 import type { components } from "./schema.js";
@@ -98,6 +103,76 @@ export class ProoflineClient extends Operations {
       (text, headers) => decodeExport(text, headers, format),
       format === "csv" ? "text/csv" : "application/x-ndjson",
     );
+  }
+
+  async *iterExportPages(
+    parameters: ExportParameters,
+    options: ExportIteratorOptions = {},
+  ): AsyncGenerator<ExportPage> {
+    const maxPages = integerLimit(options.maxPages ?? 100, "maxPages");
+    const maxRows = integerLimit(options.maxRows ?? 10_000, "maxRows");
+    const seen = new Set<string>();
+    let count = 0;
+    let cursor = parameters.query.cursor;
+    if (typeof cursor === "string") seen.add(cursor);
+    let settledUntil: string | null = null;
+    let csvColumns: string[] | null = null;
+    for (let index = 0; index < maxPages; index += 1) {
+      const query = {
+        ...parameters.query,
+        ...(cursor === undefined ? {} : { cursor }),
+      };
+      const page = await this.exportReviews({ ...parameters, query });
+      if (settledUntil === null) settledUntil = page.settledUntil;
+      else if (page.settledUntil !== settledUntil)
+        throw protocol("the export settled horizon changed across pages");
+      const firstRow = page.rows[0];
+      if (page.format === "csv" && firstRow !== undefined) {
+        const columns = Object.keys(firstRow);
+        if (csvColumns === null) csvColumns = columns;
+        else if (
+          columns.length !== csvColumns.length ||
+          columns.some(
+            (column, columnIndex) => column !== csvColumns?.[columnIndex],
+          )
+        )
+          throw protocol("the export CSV columns changed across pages");
+      }
+      if (count + page.rows.length > maxRows)
+        throw protocol("the export collection exceeds maxRows");
+      count += page.rows.length;
+      yield page;
+      if (page.nextCursor === null) return;
+      if (
+        !page.nextCursor ||
+        page.nextCursor === cursor ||
+        seen.has(page.nextCursor)
+      )
+        throw protocol("the export collection has no advancing cursor");
+      seen.add(page.nextCursor);
+      cursor = page.nextCursor;
+    }
+    throw protocol("the export collection exceeds maxPages");
+  }
+
+  async *iterExportRows(
+    parameters: ExportParameters,
+    options: ExportIteratorOptions = {},
+  ): AsyncGenerator<Record<string, unknown>> {
+    const maxPages = integerLimit(options.maxPages ?? 100, "maxPages");
+    const maxRows = integerLimit(options.maxRows ?? 10_000, "maxRows");
+    let count = 0;
+    for await (const page of this.iterExportPages(parameters, {
+      maxPages,
+      maxRows: Number.MAX_SAFE_INTEGER,
+    })) {
+      for (const row of page.rows) {
+        if (count >= maxRows)
+          throw protocol("the export collection exceeds maxRows");
+        count += 1;
+        yield row;
+      }
+    }
   }
 
   async *iterReviews(
