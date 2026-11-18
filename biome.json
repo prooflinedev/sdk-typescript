@@ -1,5 +1,5 @@
 {
-  "$schema": "https://biomejs.dev/schemas/2.6.7/schema.json",
+  "$schema": "https://biomejs.dev/schemas/2.6.8/schema.json",
   "files": {"includes": ["**", "!src/schema.d.ts", "!src/operations.ts", "!dist/**", "!node_modules/**"]},
   "formatter": {"indentStyle": "space", "indentWidth": 2},
   "javascript": {"formatter": {"quoteStyle": "double"}},

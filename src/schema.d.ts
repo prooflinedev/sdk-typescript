@@ -1761,6 +1761,8 @@ export interface components {
             /** @description The recorded reference kind, or `text` for a kind this export does not recognize. */
             kind: components["schemas"]["ExportEvidenceKind"];
         };
+        /** @description The review lane whose assessment recorded a finding. */
+        ExportFindingLane: "ENVIRONMENT" | "CODE";
         /** @enum {string} */
         ExportFindingLifecycle: "NEW" | "UNCHANGED" | "RESOLVED" | "REINTRODUCED";
         /** @enum {string} */
@@ -2119,14 +2121,15 @@ export interface components {
             created_at: string;
             /**
              * Format: uint16
-             * @description The row contract version, always `1`.
+             * @description The row contract version, always `2`.
              */
             dataset_version: number;
             /**
              * Format: uuid
-             * @description The environment of the assessment that recorded the finding.
+             * @description The environment of the assessment that recorded the finding, null for a code-lane
+             *      finding.
              */
-            environment_id: string;
+            environment_id?: string | null;
             /**
              * Format: date-time
              * @description When the decision expires, null when it records no expiry.
@@ -2137,6 +2140,8 @@ export interface components {
              * @description The finding occurrence the validation applies to.
              */
             finding_id: string;
+            /** @description The lane of the assessment that recorded the finding. */
+            lane: components["schemas"]["ExportFindingLane"];
             /**
              * Format: uuid
              * @description The organization that owns the finding.
@@ -2169,7 +2174,7 @@ export interface components {
         FindingsExportRow: {
             /**
              * Format: uuid
-             * @description The environment assessment that recorded the finding.
+             * @description The environment or code assessment that recorded the finding; `lane` says which.
              */
             assessment_id: string;
             /** @description The finding's claim, with supported credential shapes masked as `<REDACTED:kind>`. */
@@ -2181,14 +2186,14 @@ export interface components {
             created_at: string;
             /**
              * Format: uint16
-             * @description The row contract version, always `1`.
+             * @description The row contract version, always `2`.
              */
             dataset_version: number;
             /**
              * Format: uuid
-             * @description The environment the assessment covers.
+             * @description The environment the assessment covers, null for a code-lane finding.
              */
-            environment_id: string;
+            environment_id?: string | null;
             /**
              * @description The finding's evidence references in recorded order, each reduced to a kind and an
              *      opaque ID; an empty list means the finding records none.
@@ -2201,6 +2206,8 @@ export interface components {
             finding_id: string;
             /** @description The finding's stated impact, with supported credential shapes masked. */
             impact: string;
+            /** @description The lane of the assessment that recorded the finding. */
+            lane: components["schemas"]["ExportFindingLane"];
             /** @description The occurrence's recorded lifecycle state relative to earlier occurrences. */
             lifecycle_state: components["schemas"]["ExportFindingLifecycle"];
             /**

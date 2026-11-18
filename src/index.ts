@@ -104,7 +104,8 @@ export class ProoflineClient extends Operations {
       parameters,
       undefined,
       undefined,
-      (text, headers) => decodeExport(text, headers, format),
+      (text, headers) =>
+        decodeExport(text, headers, format, parameters.path.dataset),
       format === "csv" ? "text/csv" : "application/x-ndjson",
     );
   }

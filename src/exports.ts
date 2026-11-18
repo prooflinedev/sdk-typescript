@@ -7,10 +7,17 @@ export interface ExportPage {
   format: "csv" | "ndjson";
   text: string;
   rows: Record<string, unknown>[];
-  version: 1;
+  version: 1 | 2;
   settledUntil: string;
   nextCursor: string | null;
 }
+
+// Version 2 of the finding datasets adds code-lane rows. Version 1 stays accepted from servers
+// that have not moved to version 2.
+const versions: Record<string, readonly string[]> = {
+  findings: ["1", "2"],
+  finding_validations: ["1", "2"],
+};
 
 function invalid(): never {
   throw new ProoflineError(
@@ -67,12 +74,14 @@ export function decodeExport(
   text: string,
   headers: Headers,
   format: "csv" | "ndjson",
+  dataset: string,
 ): ExportPage {
   const media = format === "csv" ? "text/csv" : "application/x-ndjson";
   const settledUntil = headers.get("x-proofline-export-settled-until");
+  const version = headers.get("x-proofline-export-version") ?? "";
   if (
     headers.get("content-type")?.split(";")[0]?.trim() !== media ||
-    headers.get("x-proofline-export-version") !== "1" ||
+    !(versions[dataset] ?? ["1"]).includes(version) ||
     !settledUntil ||
     !Number.isFinite(Date.parse(settledUntil))
   )
@@ -91,7 +100,7 @@ export function decodeExport(
                 invalid();
               return row as Record<string, unknown>;
             });
-    if (rows.some((row) => String(row.dataset_version) !== "1")) invalid();
+    if (rows.some((row) => String(row.dataset_version) !== version)) invalid();
   } catch {
     invalid();
   }
@@ -99,7 +108,7 @@ export function decodeExport(
     format,
     text,
     rows,
-    version: 1,
+    version: version === "2" ? 2 : 1,
     settledUntil,
     nextCursor: headers.get("x-proofline-export-next-cursor"),
   };

@@ -1708,14 +1708,14 @@ test("exports preserve CSV cells, opaque cursors and tenant authorization failur
     const csv = request.url.includes("format=csv");
     response.writeHead(200, {
       "content-type": csv ? "text/csv" : "application/x-ndjson",
-      "x-proofline-export-version": "1",
+      "x-proofline-export-version": "2",
       "x-proofline-export-settled-until": "2026-10-25T00:00:00Z",
       "x-proofline-export-next-cursor": "opaque/+cursor",
     });
     response.end(
       csv
-        ? 'dataset_version,claim\r\n1,"comma, quote "" and\nnewline"\r\n'
-        : '{"dataset_version":1,"claim":"hello"}\n',
+        ? 'dataset_version,claim\r\n2,"comma, quote "" and\nnewline"\r\n'
+        : '{"dataset_version":2,"claim":"hello"}\n',
     );
   });
   const client = new ProoflineClient({ baseUrl, token });
@@ -1734,7 +1734,8 @@ test("exports preserve CSV cells, opaque cursors and tenant authorization failur
     ...parameters,
     query: { ...parameters.query, format: "ndjson", cursor: page.nextCursor },
   });
-  assert.equal(next.rows[0].dataset_version, 1);
+  assert.equal(next.rows[0].dataset_version, 2);
+  assert.equal(next.version, 2);
   assert.match(calls[1].url, /cursor=opaque%2F%2Bcursor/);
   assert.equal(calls[0].authorization, `Bearer ${token}`);
   await assert.rejects(
@@ -1744,6 +1745,60 @@ test("exports preserve CSV cells, opaque cursors and tenant authorization failur
     }),
     (error) => error instanceof ProoflineError && error.status === 404,
   );
+});
+
+test("export versions follow the dataset", async (t) => {
+  const served = {
+    findings: [
+      ["1", 1],
+      ["2", 2],
+      ["2", 1],
+      ["3", 3],
+    ],
+    finding_validations: [["2", 2]],
+    reviews: [
+      ["1", 1],
+      ["2", 2],
+    ],
+  };
+  const seen = {};
+  const { baseUrl } = await server(t, (request, response) => {
+    const dataset = new URL(request.url, "http://x").pathname.split("/").pop();
+    seen[dataset] = (seen[dataset] ?? 0) + 1;
+    const [header, row] = served[dataset][seen[dataset] - 1];
+    response.writeHead(200, {
+      "content-type": "application/x-ndjson",
+      "x-proofline-export-version": header,
+      "x-proofline-export-settled-until": "2026-10-25T00:00:00Z",
+    });
+    response.end(`${JSON.stringify({ dataset_version: row })}\n`);
+  });
+  const client = new ProoflineClient({ baseUrl, token });
+  const outcomes = [];
+  for (const [dataset, replies] of Object.entries(served))
+    for (const _ of replies)
+      outcomes.push([
+        dataset,
+        await client
+          .exportReviews({
+            path: { org_id: orgId, dataset },
+            query: { from: "2026-10-01T00:00:00Z", to: "2026-10-25T00:00:00Z" },
+          })
+          .then(
+            (page) => page.version,
+            (error) => error.type,
+          ),
+      ]);
+  const refused = "urn:proofline:sdk:invalid-response";
+  assert.deepEqual(outcomes, [
+    ["findings", 1],
+    ["findings", 2],
+    ["findings", refused],
+    ["findings", refused],
+    ["finding_validations", 2],
+    ["reviews", 1],
+    ["reviews", refused],
+  ]);
 });
 
 test("review exports retain every recorded kind in both formats", async (t) => {
