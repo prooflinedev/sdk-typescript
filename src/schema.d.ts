@@ -2348,6 +2348,12 @@ export interface components {
         OpenItemsThreads: {
             /** Format: date-time */
             observed_at: string;
+            /**
+             * Format: uint64
+             * @description The unresolved threads in `unresolved_count` that belong to a
+             *      finding `open_findings` already counts. Absent when none does.
+             */
+            open_finding_threads?: number;
             /** @constant */
             status: "KNOWN";
             /** Format: uint64 */
