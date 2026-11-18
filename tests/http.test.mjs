@@ -1871,6 +1871,90 @@ test("knowledge negotiates MCP and preserves scoped refusals without retry", asy
   assert.equal(calls.length, 9);
 });
 
+test("MCP accepts mixed-case JSON content types and rejects other media", async (t) => {
+  let media = "Application/JSON; charset=utf-8";
+  const { baseUrl } = await server(t, (_request, response, seen) => {
+    const body = JSON.parse(seen.at(-1).body);
+    if (body.method === "initialize")
+      return json(
+        response,
+        200,
+        { jsonrpc: "2.0", id: 1, result: { protocolVersion: "2025-11-25" } },
+        { "Content-Type": media },
+      );
+    if (body.method === "notifications/initialized") {
+      response.writeHead(202);
+      return response.end();
+    }
+    json(
+      response,
+      200,
+      { jsonrpc: "2.0", id: 2, result: { isError: true, content: [] } },
+      { "Content-Type": media },
+    );
+  });
+  const client = new ProoflineClient({ baseUrl, token });
+  const args = {
+    repository: "owner/name",
+    page_key: "index",
+    commit: "a".repeat(40),
+  };
+  assert.equal((await client.knowledge.getWikiPage(args)).isError, true);
+  media = "text/plain";
+  await assert.rejects(
+    client.knowledge.getWikiPage(args),
+    (error) =>
+      error instanceof ProoflineError && error.type === "urn:proofline:sdk:mcp",
+  );
+});
+
+test("exports accept mixed-case media types and reject other media", async (t) => {
+  let mismatch = false;
+  const { baseUrl } = await server(t, (request, response) => {
+    const csv = request.url.includes("format=csv");
+    response.writeHead(200, {
+      "content-type": mismatch
+        ? "text/plain"
+        : csv
+          ? "Text/CSV; charset=UTF-8"
+          : "Application/X-NDJSON",
+      "x-proofline-export-version": "1",
+      "x-proofline-export-settled-until": "2026-10-25T00:00:00Z",
+    });
+    response.end(
+      csv
+        ? "dataset_version,claim\r\n1,hello\r\n"
+        : '{"dataset_version":1,"claim":"hello"}\n',
+    );
+  });
+  const client = new ProoflineClient({ baseUrl, token });
+  const parameters = {
+    path: { org_id: orgId, dataset: "reviews" },
+    query: {
+      from: "2026-10-01T00:00:00Z",
+      to: "2026-10-25T00:00:00Z",
+      format: "csv",
+    },
+  };
+  assert.equal((await client.exportReviews(parameters)).rows[0].claim, "hello");
+  assert.equal(
+    (
+      await client.exportReviews({
+        ...parameters,
+        query: { ...parameters.query, format: "ndjson" },
+      })
+    ).rows[0].claim,
+    "hello",
+  );
+  mismatch = true;
+  await assert.rejects(
+    client.exportReviews(parameters),
+    (error) =>
+      error instanceof ProoflineError &&
+      error.type === "urn:proofline:sdk:invalid-response",
+  );
+});
+
 test("fix helpers preserve unavailable context and never retry a verification request", async (t) => {
   const observed = [];
   let refuse = false;
