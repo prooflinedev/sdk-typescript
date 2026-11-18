@@ -2,6 +2,10 @@ import { FixesClient } from "./fixes.js";
 
 export type { ReverificationRequest } from "./fixes.js";
 
+import { type CoverageFilesUpload, readCoverageFiles } from "./coverage.js";
+
+export type { CoverageFile, CoverageFilesUpload } from "./coverage.js";
+
 import { McpClient } from "./mcp.js";
 
 export type { McpTarget } from "./mcp.js";
@@ -26,7 +30,11 @@ import {
 
 export type { FindingReverification } from "./reverifications.js";
 
-import { type ListReviewsParameters, Operations } from "./operations.js";
+import {
+  type ListReviewsParameters,
+  Operations,
+  type UploadCoverageReportsParameters,
+} from "./operations.js";
 import type { components } from "./schema.js";
 import { type ClientOptions, sleep, Transport } from "./transport.js";
 
@@ -59,6 +67,7 @@ export interface AssessmentGaps {
   checks: {
     name: string;
     outcome: string;
+    lifecycle: string;
     detail: string | null;
     unresolvedReason: string | null;
   }[];
@@ -88,7 +97,7 @@ export class ProoflineClient extends Operations {
   readonly knowledge: KnowledgeClient;
   readonly fixes: FixesClient;
 
-  constructor(options: ClientOptions) {
+  constructor(options: ClientOptions = {}) {
     const transport = new Transport(options);
     super((method, path, parameters, body) =>
       transport.request(method, path, parameters, undefined, body),
@@ -111,6 +120,17 @@ export class ProoflineClient extends Operations {
       undefined,
       (text, headers) => decodeExport(text, headers, format),
       format === "csv" ? "text/csv" : "application/x-ndjson",
+    );
+  }
+
+  /** Reads coverage reports from disk and uploads them in one request. */
+  async uploadCoverageFiles(
+    parameters: UploadCoverageReportsParameters,
+    upload: CoverageFilesUpload,
+  ): Promise<components["schemas"]["CoverageUploadResponse"]> {
+    return this.uploadCoverageReports(
+      parameters,
+      await readCoverageFiles(upload),
     );
   }
 
@@ -340,14 +360,7 @@ function validateReview(
       )
         throw protocol("an assessment gap is malformed");
     }
-    if (
-      assessment.reason_codes !== undefined &&
-      assessment.reason_codes !== null &&
-      (!Array.isArray(assessment.reason_codes) ||
-        !assessment.reason_codes.every(
-          (reason: unknown) => typeof reason === "string",
-        ))
-    )
+    if (!optionalTexts(assessment.reason_codes))
       throw protocol("an assessment reason code is malformed");
     for (const check of assessment.checks.families) {
       if (
@@ -397,7 +410,9 @@ function terminal(review: Review): ReviewStatus | null {
     return "INCOMPLETE";
   if (review.assessments.length === 0) {
     const code = codeAssessment(review);
-    return code?.status === "COMPLETED" && !code.incompleteness_kind
+    return code?.status === "COMPLETED" &&
+      !code.incompleteness_kind &&
+      !code.reason_codes?.length
       ? "COMPLETED"
       : "INCOMPLETE";
   }
@@ -432,7 +447,8 @@ function codeAssessment(review: Review): CodeAssessment | null {
     ) ||
     (code.incompleteness_kind !== null &&
       code.incompleteness_kind !== undefined &&
-      typeof code.incompleteness_kind !== "string")
+      typeof code.incompleteness_kind !== "string") ||
+    !optionalTexts(code.reason_codes)
   )
     return null;
   if (
@@ -446,6 +462,15 @@ function codeAssessment(review: Review): CodeAssessment | null {
   )
     return null;
   return code;
+}
+
+function optionalTexts(value: unknown): boolean {
+  return (
+    value === undefined ||
+    value === null ||
+    (Array.isArray(value) &&
+      value.every((item: unknown) => typeof item === "string"))
+  );
 }
 
 function assessmentReasons(assessment: Assessment): string[] {
@@ -499,18 +524,26 @@ function outcome(
         .map((check) => ({
           name: check.name,
           outcome: check.outcome,
+          lifecycle: check.lifecycle,
           detail: check.detail ?? null,
           unresolvedReason: check.unresolved_reason ?? null,
         })),
     }));
   const code = review && codeAssessment(review);
-  if (code && (code.status !== "COMPLETED" || code.incompleteness_kind)) {
+  if (
+    code &&
+    (code.status !== "COMPLETED" ||
+      code.incompleteness_kind ||
+      code.reason_codes?.length)
+  ) {
+    const reasons = [...(code.reason_codes ?? [])];
+    if (code.incompleteness_kind) reasons.push(code.incompleteness_kind);
     gaps.push({
       assessmentId: code.id,
       status: code.status,
       incompletenessKind: code.incompleteness_kind ?? null,
-      reasonCodes: code.incompleteness_kind
-        ? [code.incompleteness_kind]
+      reasonCodes: reasons.length
+        ? reasons
         : ["CODE_ASSESSMENT_STATE_UNAVAILABLE"],
       releaseEvidenceGap: null,
       checks: [],

@@ -15,13 +15,13 @@ const client = new ProoflineClient({
 });
 ```
 
-When no token is passed, the client reads `PROOFLINE_TOKEN`, keeps it in memory, and redacts it from diagnostic output. The [SDK guide](https://proofline.sh/docs/sdks/) and [API reference](https://proofline.sh/docs/api/) cover every operation.
+When no token is passed, the client reads `PROOFLINE_TOKEN`, keeps it in memory, and redacts it from diagnostic output. When no `baseUrl` is passed, it reads `PROOFLINE_BASE_URL` and otherwise uses `https://proofline.sh`, as the CLI and the MCP bridge do, so `new ProoflineClient()` works for the hosted service. An empty variable counts as unset, and a value that is not an HTTPS origin or a loopback HTTP origin is refused by name. The [SDK guide](https://proofline.sh/docs/sdks/) and [API reference](https://proofline.sh/docs/api/) cover every operation.
 
 This repository is the published distribution of the Proofline TypeScript SDK. The public OpenAPI contract in `openapi.public.json` generates `src/operations.ts` and `src/schema.d.ts`. The transport in `src/transport.ts`, client helpers, and tests in `tests/` are hand-written. Open an [issue](https://github.com/prooflinedev/sdk-typescript/issues) for changes to the OpenAPI contract, generated code, or workflows. Pull requests are welcome for the hand-written parts.
 
 ## Errors and refusals
 
-A refused request throws `ProoflineError` with the server problem's `status`, `type`, `title` and `detail`. When a review request creates nothing, the error also carries `refusal`, whose `reason` names the setting to change, such as `NO_LINKED_ENVIRONMENT` or `ENVIRONMENT_NOT_READY`, and `repositoryName`. A refusal that does not match the public contract keeps its status, `title` and `detail` with the type `urn:proofline:sdk:invalid-response` and no `refusal`. The token is redacted from every text field, and `String(error)`, `inspect(error)` and `JSON.stringify(error)` show only the status.
+A refused request throws `ProoflineError` with the server problem's `status`, `type`, `title` and `detail`. When a review request creates nothing, the error also carries `refusal`, whose `reason` names the setting to change, such as `NO_LINKED_ENVIRONMENT` or `ENVIRONMENT_NOT_READY`, and `repositoryName`. A refusal that does not match the public contract keeps its status, `title` and `detail` with the type `urn:proofline:sdk:invalid-response` and no `refusal`. Any other status, such as the 402 a review request answers when credits cannot pay, is a plain problem with no `refusal`. The token is redacted from every text field, and `String(error)`, `inspect(error)` and `JSON.stringify(error)` show only the status.
 
 ```typescript
 import { ProoflineError } from "@proofline/sdk";
@@ -56,6 +56,20 @@ const report = await client.uploadCoverageReports(
 );
 console.log(report.report_id, report.created);
 ```
+
+To upload reports straight from disk, `uploadCoverageFiles` reads each file as UTF-8 text and names it by its path relative to `root`, which defaults to the working directory. Pass `{ path, name }` to choose a different report name.
+
+```typescript
+const report = await client.uploadCoverageFiles(
+  { path: { org_id: organizationId, repo_id: repositoryId } },
+  {
+    tested_sha: testedCommitSha,
+    files: ["coverage/lcov.info", { path: "go/cover.out", name: "go/coverage.out" }],
+  },
+);
+```
+
+It throws a `TypeError` before sending anything when the SHA is abbreviated, the report count is outside 1 to 50, two reports share a name, a name escapes `root`, a file is not UTF-8 text, or the body would exceed 30 MiB. File system errors such as a missing report are thrown unchanged.
 
 Send 1 to 50 LCOV, Cobertura XML, JaCoCo XML, or Go cover reports in a JSON body of at most 30 MiB. Each report name must be a unique relative path, and content must be the original report text. Repeating an identical upload returns the existing report with `created: false`. An upload receipt records evidence; it does not indicate that a coverage check is met.
 

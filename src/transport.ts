@@ -1,6 +1,7 @@
 import type { components } from "./schema.js";
 
-const VERSION = "5.8.0";
+const VERSION = "5.11.3";
+const DEFAULT_BASE_URL = "https://proofline.sh";
 const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
 const MAX_RETRIES = 3;
 const MAX_RETRY_SECONDS = 60;
@@ -103,7 +104,8 @@ export class ProoflineError extends Error {
 }
 
 export interface ClientOptions {
-  baseUrl: string;
+  /** Defaults to `PROOFLINE_BASE_URL`, then to `https://proofline.sh`. */
+  baseUrl?: string;
   token?: string | SecretToken;
   requestTimeoutMs?: number;
 }
@@ -126,13 +128,19 @@ function environmentToken(): string | undefined {
     : process.env.PROOFLINE_TOKEN;
 }
 
-function origin(value: string): URL {
+function environmentBaseUrl(): string | undefined {
+  if (typeof process === "undefined") return undefined;
+  // An empty variable, as a CI template leaves behind, counts as unset.
+  return process.env.PROOFLINE_BASE_URL || undefined;
+}
+
+function origin(value: string, name: string): URL {
   let url: URL;
   try {
     url = new URL(value);
   } catch {
     throw new TypeError(
-      "baseUrl must be an absolute HTTPS URL or loopback HTTP URL",
+      `${name} must be an absolute HTTPS URL or loopback HTTP URL`,
     );
   }
   const loopback =
@@ -148,10 +156,18 @@ function origin(value: string): URL {
     url.pathname !== "/"
   ) {
     throw new TypeError(
-      "baseUrl must be an HTTPS origin or loopback HTTP origin without credentials",
+      `${name} must be an HTTPS origin or loopback HTTP origin without credentials`,
     );
   }
   return url;
+}
+
+function configuredOrigin(baseUrl: string | undefined): URL {
+  if (baseUrl !== undefined) return origin(baseUrl, "baseUrl");
+  const fromEnvironment = environmentBaseUrl();
+  return fromEnvironment === undefined
+    ? origin(DEFAULT_BASE_URL, "baseUrl")
+    : origin(fromEnvironment, "PROOFLINE_BASE_URL");
 }
 
 function positive(value: number, name: string): number {
@@ -200,12 +216,12 @@ async function decoded(
       data.set(chunk, offset);
       offset += chunk.length;
     }
-    const text = new TextDecoder("utf-8", { fatal: true }).decode(data);
-    if (response.ok) return decode(text, response.headers);
+    const decoder = new TextDecoder("utf-8", { fatal: true });
+    if (response.ok) return decode(decoder.decode(data), response.headers);
     try {
-      return JSON.parse(text) as unknown;
+      return JSON.parse(decoder.decode(data)) as unknown;
     } catch {
-      // A complete HTTP refusal need not carry a JSON Problem to be retryable.
+      // A complete HTTP refusal need not carry a UTF-8 JSON Problem to be retryable.
       return undefined;
     }
   } catch (error) {
@@ -312,7 +328,9 @@ function problem(
         : // Logged internal errors omit detail; the problem itself still arrived.
           `the server returned the problem "${title}" without a detail`;
   const fields = title === undefined ? {} : { title };
-  if (!("refusal" in body))
+  // The contract types a refusal only as a review request's 400. The 402 a
+  // credit refusal answers is undocumented, so it stays a plain problem.
+  if (status !== 400 || !("refusal" in body))
     return new ProoflineError(status, type, detail, fields);
   const view = refusal(body.refusal);
   if (
@@ -392,7 +410,7 @@ export class Transport {
   readonly #timeout: number;
 
   constructor(options: ClientOptions) {
-    this.#base = origin(options.baseUrl);
+    this.#base = configuredOrigin(options.baseUrl);
     const token = options.token ?? environmentToken();
     this.#token =
       token instanceof SecretToken ? token : new SecretToken(token ?? "");

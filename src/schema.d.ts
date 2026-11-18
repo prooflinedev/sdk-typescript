@@ -479,6 +479,8 @@ export interface components {
             github_user_id: number;
             /** @description The login they were known by when they acted. Display metadata. */
             login: string;
+            /** @description Profile name resolved for this organization. Display metadata only. */
+            name?: string | null;
             /** @description Their profile on the deployment's GitHub host. */
             profile_url?: string | null;
         };
@@ -1098,8 +1100,9 @@ export interface components {
             incompleteness_kind?: string | null;
             /**
              * @description Public causes of an `INCOMPLETE` code assessment: `OUT_OF_CREDITS`
-             *      when credits refused its model. Absent otherwise; other recorded
-             *      details stay private.
+             *      when credits refused its model, and `MODEL_ANSWER_WITHHELD` when the
+             *      credential mask withheld its model's answer after the source was read.
+             *      Absent otherwise; other recorded details stay private.
              */
             reason_codes?: string[] | null;
             /**
@@ -1482,6 +1485,12 @@ export interface components {
              *      than the reviews list and a single review.
              */
             incomplete_causes?: components["schemas"]["IncompleteCause"][];
+            /**
+             * @description The supported findings of each environment investigation this review
+             *      published, by assessment in recorded order, including those the
+             *      pull-request Check left off its list. Absent when there are none.
+             */
+            investigation_findings?: components["schemas"]["ReviewInvestigationFinding"][];
             /** @description Present and true when this run is a Deep Review. */
             is_deep_review?: boolean;
             /**
@@ -1623,6 +1632,12 @@ export interface components {
              * @description One-based, append-only ordinal within one repository pull request.
              */
             run_number?: number | null;
+            /**
+             * @description Where an unfinished review's runs stand: running, queued for a worker,
+             *      waiting for a scheduled step, or due again after an attempt that did
+             *      not finish. Null once the review has ended.
+             */
+            run_progress?: components["schemas"]["RunProgress"] | null;
             /** @description The review's lifecycle status: `PENDING`, `RUNNING`, `COMPLETED`, `INCOMPLETE`, `FAILED`, `SUPERSEDED`, `STOPPED` or `EXCLUDED`. */
             status: string;
             /**
@@ -1913,7 +1928,8 @@ export interface components {
             group_by: components["schemas"]["FindingOutcomesGroupBy"];
             /**
              * @description The grouping value: a repository or environment ID, a risk domain, a severity or a
-             *      review kind, as `group_by` selects.
+             *      review kind, as `group_by` selects. Grouped by environment, code-lane findings, which
+             *      belong to no environment, share the key `code_review`.
              */
             key: string;
             /**
@@ -1923,7 +1939,8 @@ export interface components {
             limitations: string[];
             /**
              * @description The group's display name: the repository's full name (or `Repository` and its ID when
-             *      no name is recorded), the environment's display name, or otherwise `key`.
+             *      no name is recorded), the environment's display name (`Code review` for the code-lane
+             *      group), or otherwise `key`.
              */
             name: string;
             /**
@@ -2768,6 +2785,48 @@ export interface components {
              */
             repositories: components["schemas"]["FilterChoice"][];
         };
+        /**
+         * @description One environment evidence record a finding cites, as Proofline verified
+         *      it.
+         */
+        ReviewInvestigationCitation: {
+            /**
+             * Format: uuid
+             * @description The evidence collection that holds the record.
+             */
+            collection_id: string;
+            /** @description The record's stored digest. */
+            digest: string;
+            /**
+             * Format: uuid
+             * @description The record's ID.
+             */
+            record_id: string;
+            /** @description The table that holds the record. */
+            table: string;
+        };
+        /** @description One supported finding of an environment investigation. */
+        ReviewInvestigationFinding: {
+            /**
+             * @description What the finding is about: `secrets`, `configuration`, `iam`,
+             *      `network`, `capacity` or `other`.
+             */
+            area: string;
+            /**
+             * Format: uuid
+             * @description The environment assessment whose investigation recorded the finding.
+             */
+            assessment_id: string;
+            /**
+             * @description The evidence records the finding cites, each verified, in the order
+             *      the finding cites them.
+             */
+            citations: components["schemas"]["ReviewInvestigationCitation"][];
+            /** @description Model text with protected values withheld. Render it as plain text. */
+            detail: string;
+            /** @description Model text with protected values withheld. Render it as plain text. */
+            title: string;
+        };
         ReviewOpenItems: {
             /**
              * Format: uint64
@@ -3279,6 +3338,34 @@ export interface components {
              */
             run_number: number;
         };
+        /** @description Where an unfinished review's runs stand. */
+        RunProgress: {
+            /**
+             * Format: int32
+             * @description Attempts begun by the run in `state`, counting worker claims.
+             */
+            attempts: number;
+            /**
+             * Format: date-time
+             * @description When the run in `state` is due: in the past for `QUEUED`, the next
+             *      attempt for `RETRY_SCHEDULED` and the next check for `WAITING`. Null
+             *      for `RUNNING`.
+             */
+            due_at?: string | null;
+            /**
+             * Format: date-time
+             * @description When any of the review's runs last recorded a completed step. Null
+             *      before the first.
+             */
+            last_progress_at?: string | null;
+            /**
+             * @description The most telling state among the review's unfinished runs: a scheduled
+             *      retry, then a running worker, then a queued run, then a wait.
+             */
+            state: components["schemas"]["RunProgressState"];
+        };
+        /** @description What an unfinished review's runs are doing now. */
+        RunProgressState: "WAITING" | "QUEUED" | "RUNNING" | "RETRY_SCHEDULED";
         /** @description One request to scan a ref or an exact commit of the repository. */
         ScanRequestBody: {
             /**
@@ -4222,16 +4309,32 @@ export interface operations {
                  *      findings, FAILED/INCOMPLETE/STOPPED execution, or an earlier reviewed commit.
                  */
                 attention?: string | null;
+                /**
+                 * @description `mine` for the caller's own pull requests, or a GitHub user ID. `mine`
+                 *      needs a person's sign-in or token.
+                 */
                 author?: string | null;
                 cursor?: string | null;
                 environment?: string | null;
+                /**
+                 * @description `present` lists reviews with at least one finding; `none` lists reviews
+                 *      with no finding.
+                 */
                 findings?: string | null;
+                /**
+                 * @description One review kind: `PULL_REQUEST`, `DEPLOYMENT`, `PATCH`, `COMMIT`,
+                 *      `FILES`, `MERGE_GROUP` or `REVISION_SCAN`.
+                 */
                 kind?: string | null;
                 limit?: number | null;
                 /** @description Qualifiers, quoted values, AND/OR, groups and minus exclusions. */
                 query?: string | null;
                 repository?: string | null;
                 search?: string | null;
+                /**
+                 * @description One review status: `PENDING`, `RUNNING`, `COMPLETED`, `INCOMPLETE`,
+                 *      `FAILED`, `SUPERSEDED`, `STOPPED` or `EXCLUDED`.
+                 */
                 status?: string | null;
             };
             header?: never;
@@ -4300,16 +4403,32 @@ export interface operations {
                  *      findings, FAILED/INCOMPLETE/STOPPED execution, or an earlier reviewed commit.
                  */
                 attention?: string | null;
+                /**
+                 * @description `mine` for the caller's own pull requests, or a GitHub user ID. `mine`
+                 *      needs a person's sign-in or token.
+                 */
                 author?: string | null;
                 cursor?: string | null;
                 environment?: string | null;
+                /**
+                 * @description `present` lists reviews with at least one finding; `none` lists reviews
+                 *      with no finding.
+                 */
                 findings?: string | null;
+                /**
+                 * @description One review kind: `PULL_REQUEST`, `DEPLOYMENT`, `PATCH`, `COMMIT`,
+                 *      `FILES`, `MERGE_GROUP` or `REVISION_SCAN`.
+                 */
                 kind?: string | null;
                 limit?: number | null;
                 /** @description Qualifiers, quoted values, AND/OR, groups and minus exclusions. */
                 query?: string | null;
                 repository?: string | null;
                 search?: string | null;
+                /**
+                 * @description One review status: `PENDING`, `RUNNING`, `COMPLETED`, `INCOMPLETE`,
+                 *      `FAILED`, `SUPERSEDED`, `STOPPED` or `EXCLUDED`.
+                 */
                 status?: string | null;
             };
             header?: never;

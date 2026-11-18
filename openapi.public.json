@@ -22,6 +22,13 @@
             "description": "The login they were known by when they acted. Display metadata.",
             "type": "string"
           },
+          "name": {
+            "description": "Profile name resolved for this organization. Display metadata only.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "profile_url": {
             "description": "Their profile on the deployment's GitHub host.",
             "type": [
@@ -1245,7 +1252,7 @@
             ]
           },
           "reason_codes": {
-            "description": "Public causes of an `INCOMPLETE` code assessment: `OUT_OF_CREDITS`\n when credits refused its model. Absent otherwise; other recorded\n details stay private.",
+            "description": "Public causes of an `INCOMPLETE` code assessment: `OUT_OF_CREDITS`\n when credits refused its model, and `MODEL_ANSWER_WITHHELD` when the\n credential mask withheld its model's answer after the source was read.\n Absent otherwise; other recorded details stay private.",
             "items": {
               "type": "string"
             },
@@ -1844,6 +1851,13 @@
             },
             "type": "array"
           },
+          "investigation_findings": {
+            "description": "The supported findings of each environment investigation this review\n published, by assessment in recorded order, including those the\n pull-request Check left off its list. Absent when there are none.",
+            "items": {
+              "$ref": "#/components/schemas/ReviewInvestigationFinding"
+            },
+            "type": "array"
+          },
           "is_deep_review": {
             "description": "Present and true when this run is a Deep Review.",
             "type": "boolean"
@@ -2071,6 +2085,17 @@
               "integer",
               "null"
             ]
+          },
+          "run_progress": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RunProgress"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Where an unfinished review's runs stand: running, queued for a worker,\n waiting for a scheduled step, or due again after an attempt that did\n not finish. Null once the review has ended."
           },
           "status": {
             "description": "The review's lifecycle status: `PENDING`, `RUNNING`, `COMPLETED`, `INCOMPLETE`, `FAILED`, `SUPERSEDED`, `STOPPED` or `EXCLUDED`.",
@@ -2848,7 +2873,7 @@
             "description": "The dimension that defines this row's group."
           },
           "key": {
-            "description": "The grouping value: a repository or environment ID, a risk domain, a severity or a\n review kind, as `group_by` selects.",
+            "description": "The grouping value: a repository or environment ID, a risk domain, a severity or a\n review kind, as `group_by` selects. Grouped by environment, code-lane findings, which\n belong to no environment, share the key `code_review`.",
             "type": "string"
           },
           "limitations": {
@@ -2859,7 +2884,7 @@
             "type": "array"
           },
           "name": {
-            "description": "The group's display name: the repository's full name (or `Repository` and its ID when\n no name is recorded), the environment's display name, or otherwise `key`.",
+            "description": "The group's display name: the repository's full name (or `Repository` and its ID when\n no name is recorded), the environment's display name (`Code review` for the code-lane\n group), or otherwise `key`.",
             "type": "string"
           },
           "organization_id": {
@@ -4511,6 +4536,73 @@
         ],
         "type": "object"
       },
+      "ReviewInvestigationCitation": {
+        "description": "One environment evidence record a finding cites, as Proofline verified\n it.",
+        "properties": {
+          "collection_id": {
+            "description": "The evidence collection that holds the record.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "digest": {
+            "description": "The record's stored digest.",
+            "type": "string"
+          },
+          "record_id": {
+            "description": "The record's ID.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "table": {
+            "description": "The table that holds the record.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "collection_id",
+          "table",
+          "record_id",
+          "digest"
+        ],
+        "type": "object"
+      },
+      "ReviewInvestigationFinding": {
+        "description": "One supported finding of an environment investigation.",
+        "properties": {
+          "area": {
+            "description": "What the finding is about: `secrets`, `configuration`, `iam`,\n `network`, `capacity` or `other`.",
+            "type": "string"
+          },
+          "assessment_id": {
+            "description": "The environment assessment whose investigation recorded the finding.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "citations": {
+            "description": "The evidence records the finding cites, each verified, in the order\n the finding cites them.",
+            "items": {
+              "$ref": "#/components/schemas/ReviewInvestigationCitation"
+            },
+            "type": "array"
+          },
+          "detail": {
+            "description": "Model text with protected values withheld. Render it as plain text.",
+            "type": "string"
+          },
+          "title": {
+            "description": "Model text with protected values withheld. Render it as plain text.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "assessment_id",
+          "area",
+          "title",
+          "detail",
+          "citations"
+        ],
+        "type": "object"
+      },
       "ReviewOpenItems": {
         "properties": {
           "accepted_risk_count": {
@@ -5480,6 +5572,70 @@
         ],
         "type": "object"
       },
+      "RunProgress": {
+        "description": "Where an unfinished review's runs stand.",
+        "properties": {
+          "attempts": {
+            "description": "Attempts begun by the run in `state`, counting worker claims.",
+            "format": "int32",
+            "type": "integer"
+          },
+          "due_at": {
+            "description": "When the run in `state` is due: in the past for `QUEUED`, the next\n attempt for `RETRY_SCHEDULED` and the next check for `WAITING`. Null\n for `RUNNING`.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "last_progress_at": {
+            "description": "When any of the review's runs last recorded a completed step. Null\n before the first.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/RunProgressState"
+              }
+            ],
+            "description": "The most telling state among the review's unfinished runs: a scheduled\n retry, then a running worker, then a queued run, then a wait."
+          }
+        },
+        "required": [
+          "state",
+          "attempts"
+        ],
+        "type": "object"
+      },
+      "RunProgressState": {
+        "description": "What an unfinished review's runs are doing now.",
+        "oneOf": [
+          {
+            "const": "WAITING",
+            "description": "A run waits for a scheduled step, such as a push's quiet period, a\n resource another run holds, or its assessments, and is checked again\n at `due_at`.",
+            "type": "string"
+          },
+          {
+            "const": "QUEUED",
+            "description": "A run is due and no worker has claimed it yet. It has been due since\n `due_at`.",
+            "type": "string"
+          },
+          {
+            "const": "RUNNING",
+            "description": "A worker is running one of the review's runs.",
+            "type": "string"
+          },
+          {
+            "const": "RETRY_SCHEDULED",
+            "description": "An attempt of a run ended without finishing, and the run starts again\n at `due_at`.",
+            "type": "string"
+          }
+        ]
+      },
       "ScanRequestBody": {
         "additionalProperties": false,
         "description": "One request to scan a ref or an exact commit of the repository.",
@@ -6075,7 +6231,7 @@
   },
   "info": {
     "title": "Proofline Review API",
-    "version": "5.8.0"
+    "version": "5.11.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -7149,9 +7305,11 @@
             "style": "form"
           },
           {
+            "description": "`mine` for the caller's own pull requests, or a GitHub user ID. `mine`\n needs a person's sign-in or token.",
             "in": "query",
             "name": "author",
             "schema": {
+              "description": "`mine` for the caller's own pull requests, or a GitHub user ID. `mine`\n needs a person's sign-in or token.",
               "type": [
                 "string",
                 "null"
@@ -7183,9 +7341,11 @@
             "style": "form"
           },
           {
+            "description": "`present` lists reviews with at least one finding; `none` lists reviews\n with no finding.",
             "in": "query",
             "name": "findings",
             "schema": {
+              "description": "`present` lists reviews with at least one finding; `none` lists reviews\n with no finding.",
               "type": [
                 "string",
                 "null"
@@ -7194,9 +7354,11 @@
             "style": "form"
           },
           {
+            "description": "One review kind: `PULL_REQUEST`, `DEPLOYMENT`, `PATCH`, `COMMIT`,\n `FILES`, `MERGE_GROUP` or `REVISION_SCAN`.",
             "in": "query",
             "name": "kind",
             "schema": {
+              "description": "One review kind: `PULL_REQUEST`, `DEPLOYMENT`, `PATCH`, `COMMIT`,\n `FILES`, `MERGE_GROUP` or `REVISION_SCAN`.",
               "type": [
                 "string",
                 "null"
@@ -7253,9 +7415,11 @@
             "style": "form"
           },
           {
+            "description": "One review status: `PENDING`, `RUNNING`, `COMPLETED`, `INCOMPLETE`,\n `FAILED`, `SUPERSEDED`, `STOPPED` or `EXCLUDED`.",
             "in": "query",
             "name": "status",
             "schema": {
+              "description": "One review status: `PENDING`, `RUNNING`, `COMPLETED`, `INCOMPLETE`,\n `FAILED`, `SUPERSEDED`, `STOPPED` or `EXCLUDED`.",
               "type": [
                 "string",
                 "null"
@@ -7413,9 +7577,11 @@
             "style": "form"
           },
           {
+            "description": "`mine` for the caller's own pull requests, or a GitHub user ID. `mine`\n needs a person's sign-in or token.",
             "in": "query",
             "name": "author",
             "schema": {
+              "description": "`mine` for the caller's own pull requests, or a GitHub user ID. `mine`\n needs a person's sign-in or token.",
               "type": [
                 "string",
                 "null"
@@ -7447,9 +7613,11 @@
             "style": "form"
           },
           {
+            "description": "`present` lists reviews with at least one finding; `none` lists reviews\n with no finding.",
             "in": "query",
             "name": "findings",
             "schema": {
+              "description": "`present` lists reviews with at least one finding; `none` lists reviews\n with no finding.",
               "type": [
                 "string",
                 "null"
@@ -7458,9 +7626,11 @@
             "style": "form"
           },
           {
+            "description": "One review kind: `PULL_REQUEST`, `DEPLOYMENT`, `PATCH`, `COMMIT`,\n `FILES`, `MERGE_GROUP` or `REVISION_SCAN`.",
             "in": "query",
             "name": "kind",
             "schema": {
+              "description": "One review kind: `PULL_REQUEST`, `DEPLOYMENT`, `PATCH`, `COMMIT`,\n `FILES`, `MERGE_GROUP` or `REVISION_SCAN`.",
               "type": [
                 "string",
                 "null"
@@ -7517,9 +7687,11 @@
             "style": "form"
           },
           {
+            "description": "One review status: `PENDING`, `RUNNING`, `COMPLETED`, `INCOMPLETE`,\n `FAILED`, `SUPERSEDED`, `STOPPED` or `EXCLUDED`.",
             "in": "query",
             "name": "status",
             "schema": {
+              "description": "One review status: `PENDING`, `RUNNING`, `COMPLETED`, `INCOMPLETE`,\n `FAILED`, `SUPERSEDED`, `STOPPED` or `EXCLUDED`.",
               "type": [
                 "string",
                 "null"

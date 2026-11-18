@@ -7,6 +7,7 @@ import {
   readFile,
   rm,
   symlink,
+  truncate,
   writeFile,
 } from "node:fs/promises";
 import { createServer } from "node:http";
@@ -357,6 +358,101 @@ test("coverage uploads preserve the tested commit, report text and server refusa
   }
 });
 
+test("coverage file uploads send report text as written under relative names", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "proofline-coverage-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const lcov = "﻿SF:src/app.ts\r\nDA:1,1\r\nend_of_record\r\n";
+  const go = "mode: set\nexample/main.go:1.1,1.2 1 0\n";
+  await writeFile(join(root, "lcov.info"), lcov);
+  await writeFile(join(root, "go.out"), go);
+  const fixture = await server(t, (_request, response) =>
+    json(response, 201, {
+      report_id: findingId,
+      tested_sha: "c".repeat(40),
+      created: true,
+      formats: ["LCOV", "GO_PROFILE"],
+      instrumented_lines: 2,
+      covered_lines: 1,
+    }),
+  );
+  const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
+  const parameters = { path: { org_id: orgId, repo_id: repoId } };
+  const result = await client.uploadCoverageFiles(parameters, {
+    tested_sha: "c".repeat(40),
+    root,
+    files: [
+      "lcov.info",
+      { path: join(root, "go.out"), name: "go/coverage.out" },
+    ],
+  });
+  assert.equal(result.created, true);
+  assert.equal(fixture.calls.length, 1);
+  assert.equal(
+    fixture.calls[0].url,
+    `/api/v1/organizations/${orgId}/repositories/${repoId}/coverage-reports`,
+  );
+  assert.deepEqual(JSON.parse(fixture.calls[0].body), {
+    tested_sha: "c".repeat(40),
+    reports: [
+      { name: "lcov.info", content: lcov },
+      { name: "go/coverage.out", content: go },
+    ],
+  });
+});
+
+test("coverage file uploads refuse locally what the server would refuse", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "proofline-coverage-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await writeFile(join(root, "lcov.info"), "SF:a.ts\nend_of_record\n");
+  await writeFile(join(root, "report.gz"), Buffer.from([0x1f, 0x8b, 0xff]));
+  await writeFile(join(root, "huge.info"), "");
+  await truncate(join(root, "huge.info"), 30 * 1024 * 1024 + 1);
+  const fixture = await server(t, (_request, response) =>
+    json(response, 500, {}),
+  );
+  const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
+  const parameters = { path: { org_id: orgId, repo_id: repoId } };
+  const sha = "c".repeat(40);
+  const refusals = [
+    [{ tested_sha: "main", files: ["lcov.info"] }, /full 40-character/],
+    [{ tested_sha: "c".repeat(12), files: ["lcov.info"] }, /full 40-character/],
+    [{ tested_sha: sha, files: [] }, /1 to 50/],
+    [{ tested_sha: sha, files: Array(51).fill("lcov.info") }, /1 to 50/],
+    [
+      { tested_sha: sha, files: ["lcov.info", { path: "lcov.info" }] },
+      /unique/,
+    ],
+    [
+      { tested_sha: sha, files: [join(tmpdir(), "outside.info")] },
+      /inside root/,
+    ],
+    [
+      { tested_sha: sha, files: [{ path: "lcov.info", name: "/abs.info" }] },
+      /inside root/,
+    ],
+    [
+      { tested_sha: sha, files: [{ path: "lcov.info", name: "a/../b.info" }] },
+      /inside root/,
+    ],
+    [{ tested_sha: sha, files: ["report.gz"] }, /report\.gz is not UTF-8/],
+    [{ tested_sha: sha, files: ["huge.info"] }, /30 MiB/],
+  ];
+  for (const [upload, message] of refusals)
+    await assert.rejects(
+      client.uploadCoverageFiles(parameters, { root, ...upload }),
+      (error) => error instanceof TypeError && message.test(error.message),
+    );
+  await assert.rejects(
+    client.uploadCoverageFiles(parameters, {
+      tested_sha: sha,
+      root,
+      files: ["absent.info"],
+    }),
+    { code: "ENOENT" },
+  );
+  assert.equal(fixture.calls.length, 0);
+});
+
 test("review reads preserve summaries, withheld prose and exact code identity", async (t) => {
   const summary = {
     head_sha: "a".repeat(40),
@@ -510,9 +606,16 @@ test("reads honor bounded Retry-After and mutations make one attempt", async (t)
   }
 });
 
+const invalidUtf8Body = Buffer.concat([
+  Buffer.from(`<html>${responseCanary} ${token}`),
+  Buffer.from([0xff]),
+  Buffer.from("</html>"),
+]);
+
 const refusalBodies = [
   ["empty", "", "application/json"],
   ["HTML", `<html>${responseCanary} ${token}</html>`, "text/html"],
+  ["invalid UTF-8", invalidUtf8Body, "text/html"],
   [
     "malformed JSON",
     `{"detail":"${responseCanary} ${token}`,
@@ -520,7 +623,7 @@ const refusalBodies = [
   ],
 ];
 
-test("reads retry empty, HTML and malformed JSON refusals before decoding success", async (t) => {
+test("reads retry undecodable refusals before decoding success", async (t) => {
   for (const status of [429, 503]) {
     for (const [name, body, contentType] of refusalBodies) {
       await t.test(`${status} ${name}`, async (t) => {
@@ -690,6 +793,41 @@ test("a malformed refusal keeps the fixed SDK problem type", async (t) => {
       },
     );
   }
+});
+
+test("a credit refusal keeps the server problem", async (t) => {
+  let body;
+  const fixture = await server(t, (_request, response) =>
+    json(response, 402, body, { "Content-Type": "application/problem+json" }),
+  );
+  const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
+  const path = { org_id: orgId, repo_id: repoId };
+  const views = [
+    { reason: "OUT_OF_CREDITS" },
+    { reason: "PLAN_CREDITS_SPENT", resets: "2026-12-01T00:00:00Z" },
+  ];
+  for (const view of views) {
+    body = {
+      title: "payment required",
+      status: 402,
+      detail: `credits cannot pay for ${token}`,
+      repository_name: "api",
+      refusal: view,
+    };
+    for (const request of reviewRequests) {
+      await assert.rejects(request(client, path), (error) => {
+        assert(error instanceof ProoflineError);
+        assert.equal(error.status, 402);
+        assert.equal(error.type, "about:blank");
+        assert.equal(error.title, "payment required");
+        assert.equal(error.detail, "credits cannot pay for [redacted]");
+        assert.equal(error.refusal, undefined);
+        assert.equal(error.repositoryName, undefined);
+        return true;
+      });
+    }
+  }
+  assert.equal(fixture.calls.length, views.length * reviewRequests.length);
 });
 
 test("a problem without a detail keeps its status and title", async (t) => {
@@ -879,41 +1017,130 @@ test("refusal retries preserve response bounds and the caller deadline", async (
   assert.equal(fixture.calls.length - before, 1);
 });
 
+test("invalid UTF-8 never hides successful-body or incomplete-body failures", async (t) => {
+  for (const status of [200, 429, 503]) {
+    for (const mode of [
+      "complete",
+      "oversized",
+      "truncated",
+      "interrupted",
+      "stalled",
+    ]) {
+      if (status !== 200 && mode === "complete") continue;
+      await t.test(`${status} ${mode}`, async (t) => {
+        const fixture = await server(t, (_, response) => {
+          response.writeHead(status, {
+            "Content-Type": "application/json",
+            "Retry-After": "0",
+            ...(mode === "truncated"
+              ? {
+                  "Content-Length": String(invalidUtf8Body.length + 100),
+                  Connection: "close",
+                }
+              : {}),
+          });
+          if (mode === "oversized")
+            return response.end(Buffer.alloc(8 * 1024 * 1024 + 1, 0xff));
+          if (mode === "stalled") return response.write(invalidUtf8Body);
+          if (mode === "interrupted") {
+            // End the TCP stream without terminating the chunked HTTP body.
+            response.write(invalidUtf8Body, () => response.socket.end());
+            return;
+          }
+          response.end(invalidUtf8Body);
+        });
+        const client = new ProoflineClient({
+          baseUrl: fixture.baseUrl,
+          token,
+          requestTimeoutMs: mode === "stalled" ? 100 : 5_000,
+        });
+        await assert.rejects(
+          client.getReview({ path: { org_id: orgId, review_id: reviewId } }),
+          (error) => {
+            assert(error instanceof ProoflineError);
+            const timeout = status === 200 && mode === "stalled";
+            assert.equal(error.status, timeout ? 0 : status);
+            assert.equal(
+              error.type,
+              timeout
+                ? "urn:proofline:sdk:transport"
+                : "urn:proofline:sdk:invalid-response",
+            );
+            if (mode === "oversized")
+              assert.equal(error.detail, "the response exceeds 8 MiB");
+            assert(!error.detail.includes(token));
+            assert(!error.detail.includes(responseCanary));
+            return true;
+          },
+        );
+        assert.equal(fixture.calls.length, 1);
+      });
+    }
+  }
+});
+
+test("review waits recover from invalid UTF-8 refusals and retain retry deadlines", async (t) => {
+  for (const status of [429, 503]) {
+    for (const retryAfter of ["0", "60"]) {
+      await t.test(`${status} Retry-After ${retryAfter}`, async (t) => {
+        const fixture = await server(t, (_, response, calls) => {
+          if (calls.length === 1) {
+            response.writeHead(status, { "Retry-After": retryAfter });
+            return response.end(invalidUtf8Body);
+          }
+          json(response, 200, review());
+        });
+        const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
+        const result = await client.waitForReview(orgId, reviewId, {
+          timeoutMs: 5_000,
+        });
+        assert.equal(
+          result.status,
+          retryAfter === "0" ? "COMPLETED" : "TIMED_OUT",
+        );
+        assert.equal(fixture.calls.length, retryAfter === "0" ? 2 : 1);
+      });
+    }
+  }
+});
+
 test("export reads retry non-JSON refusals independently of the successful format", async (t) => {
   for (const format of ["csv", "ndjson"]) {
-    await t.test(format, async (t) => {
-      const fixture = await server(t, (_, response, calls) => {
-        if (calls.length === 1) {
-          response.writeHead(503, {
-            "Content-Type": "text/html",
-            "Retry-After": "0",
+    for (const [name, body, contentType] of refusalBodies) {
+      await t.test(`${format} ${name}`, async (t) => {
+        const fixture = await server(t, (_, response, calls) => {
+          if (calls.length === 1) {
+            response.writeHead(503, {
+              "Content-Type": contentType,
+              "Retry-After": "0",
+            });
+            return response.end(body);
+          }
+          response.writeHead(200, {
+            "Content-Type":
+              format === "csv" ? "text/csv" : "application/x-ndjson",
+            "X-Proofline-Export-Version": "1",
+            "X-Proofline-Export-Settled-Until": "2026-10-25T00:00:00Z",
           });
-          return response.end(`<html>${responseCanary}</html>`);
-        }
-        response.writeHead(200, {
-          "Content-Type":
-            format === "csv" ? "text/csv" : "application/x-ndjson",
-          "X-Proofline-Export-Version": "1",
-          "X-Proofline-Export-Settled-Until": "2026-10-25T00:00:00Z",
+          response.end(
+            format === "csv"
+              ? "dataset_version,claim\r\n1,hello\r\n"
+              : '{"dataset_version":1,"claim":"hello"}\n',
+          );
         });
-        response.end(
-          format === "csv"
-            ? "dataset_version,claim\r\n1,hello\r\n"
-            : '{"dataset_version":1,"claim":"hello"}\n',
-        );
+        const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
+        const page = await client.exportReviews({
+          path: { org_id: orgId, dataset: "findings" },
+          query: {
+            from: "2026-10-01T00:00:00Z",
+            to: "2026-10-25T00:00:00Z",
+            format,
+          },
+        });
+        assert.equal(page.rows[0].claim, "hello");
+        assert.equal(fixture.calls.length, 2);
       });
-      const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
-      const page = await client.exportReviews({
-        path: { org_id: orgId, dataset: "findings" },
-        query: {
-          from: "2026-10-01T00:00:00Z",
-          to: "2026-10-25T00:00:00Z",
-          format,
-        },
-      });
-      assert.equal(page.rows[0].claim, "hello");
-      assert.equal(fixture.calls.length, 2);
-    });
+    }
   }
 });
 
@@ -1030,6 +1257,49 @@ test("waiting retains assessment gaps, unknown states and unresolved checks with
       error.type === "urn:proofline:sdk:invalid-response",
   );
 });
+
+for (const [outcome, lifecycle] of [
+  ["UNRESOLVED", "SHADOW"],
+  ["READY", "FUTURE_LIFECYCLE"],
+]) {
+  test(`waiting preserves ${lifecycle} lifecycle in check-gap summaries`, async (t) => {
+    const body = review("COMPLETED", [
+      {
+        ...assessment(),
+        checks: {
+          receipt_recorded: true,
+          status: "READY",
+          families: [
+            {
+              name: "Environment reachability",
+              outcome,
+              lifecycle,
+              detail: "evidence gap",
+              unresolved_reason: "NEEDS_EVIDENCE",
+            },
+          ],
+        },
+      },
+    ]);
+    const fixture = await server(t, (_, response) => json(response, 200, body));
+    const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
+
+    const result = await client.waitForReview(orgId, reviewId);
+
+    assert.equal(result.status, "INCOMPLETE");
+    assert.deepEqual(result.review, body);
+    assert.equal(result.gaps.length, 1);
+    assert.deepEqual(result.gaps[0].checks, [
+      {
+        name: "Environment reachability",
+        outcome,
+        lifecycle,
+        detail: "evidence gap",
+        unresolvedReason: "NEEDS_EVIDENCE",
+      },
+    ]);
+  });
+}
 
 test("CODE-only outcomes retain execution gaps while ENV assessments keep precedence", async (t) => {
   let body;
@@ -1712,6 +1982,103 @@ test("credentials remain on the configured origin and malformed responses carry 
   await assert.rejects(
     client.getReview({ path: { org_id: "..", review_id: reviewId } }),
     TypeError,
+  );
+});
+
+function withEnvironment(t, name, value) {
+  const previous = process.env[name];
+  const restore = () => {
+    if (previous === undefined) delete process.env[name];
+    else process.env[name] = previous;
+  };
+  t.after(restore);
+  const set = (next) => {
+    if (next === undefined) delete process.env[name];
+    else process.env[name] = next;
+  };
+  set(value);
+  return set;
+}
+
+test("a client without a baseUrl reads PROOFLINE_BASE_URL and sends the token there", async (t) => {
+  const fixture = await server(t, (_, response) =>
+    json(response, 200, { id: reviewId }),
+  );
+  withEnvironment(t, "PROOFLINE_BASE_URL", fixture.baseUrl);
+  withEnvironment(t, "PROOFLINE_TOKEN", token);
+  const client = new ProoflineClient();
+  const review = await client.getReview({
+    path: { org_id: orgId, review_id: reviewId },
+  });
+  assert.equal(review.id, reviewId);
+  assert.equal(fixture.calls.length, 1);
+  assert.equal(
+    fixture.calls[0].url,
+    `/api/v1/organizations/${orgId}/reviews/${reviewId}`,
+  );
+  assert.equal(fixture.calls[0].authorization, `Bearer ${token}`);
+});
+
+test("an explicit baseUrl wins over PROOFLINE_BASE_URL", async (t) => {
+  const chosen = await server(t, (_, response) =>
+    json(response, 200, { id: reviewId }),
+  );
+  const ignored = await server(t, (_, response) =>
+    json(response, 200, { id: reviewId }),
+  );
+  withEnvironment(t, "PROOFLINE_BASE_URL", ignored.baseUrl);
+  const client = new ProoflineClient({ baseUrl: chosen.baseUrl, token });
+  await client.getReview({ path: { org_id: orgId, review_id: reviewId } });
+  assert.equal(chosen.calls.length, 1);
+  assert.equal(ignored.calls.length, 0);
+});
+
+test("without a baseUrl or a non-empty PROOFLINE_BASE_URL the client uses https://proofline.sh", async (t) => {
+  const requested = [];
+  const original = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    requested.push(String(url));
+    return new Response(JSON.stringify({ id: reviewId }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  };
+  t.after(() => {
+    globalThis.fetch = original;
+  });
+  const set = withEnvironment(t, "PROOFLINE_BASE_URL", undefined);
+  for (const value of [undefined, ""]) {
+    set(value);
+    const client = new ProoflineClient({ token });
+    await client.getReview({ path: { org_id: orgId, review_id: reviewId } });
+  }
+  assert.deepEqual(requested, [
+    `https://proofline.sh/api/v1/organizations/${orgId}/reviews/${reviewId}`,
+    `https://proofline.sh/api/v1/organizations/${orgId}/reviews/${reviewId}`,
+  ]);
+});
+
+test("an unusable PROOFLINE_BASE_URL is refused by name without echoing its value", (t) => {
+  const set = withEnvironment(t, "PROOFLINE_BASE_URL", undefined);
+  for (const value of [
+    "http://customer.example",
+    "https://user:password-canary@customer.example",
+    "https://customer.example/path",
+    "not a url",
+  ]) {
+    set(value);
+    assert.throws(
+      () => new ProoflineClient({ token }),
+      (error) =>
+        error instanceof TypeError &&
+        error.message.startsWith("PROOFLINE_BASE_URL must be") &&
+        !error.message.includes("password-canary") &&
+        !error.message.includes(value),
+    );
+  }
+  assert.throws(
+    () => new ProoflineClient({ baseUrl: "http://customer.example", token }),
+    (error) => error.message.startsWith("baseUrl must be"),
   );
 });
 
