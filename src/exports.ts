@@ -1,3 +1,4 @@
+import { mediaType } from "./media-type.js";
 import type { paths } from "./schema.js";
 import { ProoflineError } from "./transport.js";
 
@@ -71,7 +72,7 @@ export function decodeExport(
   const media = format === "csv" ? "text/csv" : "application/x-ndjson";
   const settledUntil = headers.get("x-proofline-export-settled-until");
   if (
-    headers.get("content-type")?.split(";")[0]?.trim() !== media ||
+    mediaType(headers) !== media ||
     headers.get("x-proofline-export-version") !== "1" ||
     !settledUntil ||
     !Number.isFinite(Date.parse(settledUntil))

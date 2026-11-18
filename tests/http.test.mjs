@@ -1707,7 +1707,7 @@ test("exports preserve CSV cells, opaque cursors and tenant authorization failur
       return json(response, 404, { detail: "not found" });
     const csv = request.url.includes("format=csv");
     response.writeHead(200, {
-      "content-type": csv ? "text/csv" : "application/x-ndjson",
+      "content-type": csv ? "Text/CSV" : "Application/X-NDJSON",
       "x-proofline-export-version": "1",
       "x-proofline-export-settled-until": "2026-10-25T00:00:00Z",
       "x-proofline-export-next-cursor": "opaque/+cursor",
@@ -1829,11 +1829,16 @@ test("knowledge negotiates MCP and preserves scoped refusals without retry", asy
     assert.equal(request.url, "/mcp");
     assert.equal(request.headers.authorization, `Bearer ${token}`);
     if (body.method === "initialize") {
-      json(response, 200, {
-        jsonrpc: "2.0",
-        id: 1,
-        result: { protocolVersion: "2025-11-25" },
-      });
+      json(
+        response,
+        200,
+        {
+          jsonrpc: "2.0",
+          id: 1,
+          result: { protocolVersion: "2025-11-25" },
+        },
+        { "Content-Type": "Application/JSON; Charset=UTF-8" },
+      );
     } else if (body.method === "notifications/initialized") {
       assert.equal(request.headers["mcp-protocol-version"], "2025-11-25");
       response.writeHead(202);
@@ -1846,15 +1851,21 @@ test("knowledge negotiates MCP and preserves scoped refusals without retry", asy
         commit: "a".repeat(40),
       });
       if (refusal) json(response, 503, { detail: "unavailable" });
-      else
-        json(response, 200, {
-          jsonrpc: "2.0",
-          id: wrongId ? 99 : 2,
-          result: {
-            isError: true,
-            content: [{ type: "text", text: "RESOURCE_NOT_FOUND" }],
+      else {
+        json(
+          response,
+          200,
+          {
+            jsonrpc: "2.0",
+            id: wrongId ? 99 : 2,
+            result: {
+              isError: true,
+              content: [{ type: "text", text: "RESOURCE_NOT_FOUND" }],
+            },
           },
-        });
+          { "Content-Type": "APPLICATION/JSON" },
+        );
+      }
     }
   });
   const client = new ProoflineClient({ baseUrl, token });
