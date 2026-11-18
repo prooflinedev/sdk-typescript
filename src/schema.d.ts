@@ -1735,6 +1735,12 @@ export interface components {
             run_number: number;
             /** @description Severity used by the series count; the linked occurrence may be less severe. */
             severity: string;
+            /**
+             * @description The linked occurrence's title, which heads the series' GitHub thread.
+             *      Absent when the occurrence has none or its review withheld a value
+             *      from it, so no text that review kept off GitHub is shown here.
+             */
+            title?: string | null;
         };
         /**
          * @description One environment linked to the reviewed repository, and whether this
