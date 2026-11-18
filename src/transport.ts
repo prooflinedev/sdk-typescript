@@ -1,3 +1,4 @@
+import { mediaType } from "./media-type.js";
 import type { components } from "./schema.js";
 
 const VERSION = "5.11.3";
@@ -508,9 +509,7 @@ export class Transport {
         if (
           response.status !== (notification ? 202 : 200) ||
           response.headers.has("mcp-session-id") ||
-          (!notification &&
-            response.headers.get("content-type")?.split(";")[0]?.trim() !==
-              "application/json")
+          (!notification && mediaType(response.headers) !== "application/json")
         ) {
           await response.body?.cancel();
           throw new ProoflineError(
