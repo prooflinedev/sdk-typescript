@@ -95,7 +95,7 @@ export class ProoflineClient extends Operations {
   }
 
   async exportReviews(parameters: ExportParameters): Promise<ExportPage> {
-    const format = parameters.query.format ?? "ndjson";
+    const format = parameters.query?.format ?? "ndjson";
     if (format !== "csv" && format !== "ndjson")
       throw new TypeError("export format must be csv or ndjson");
     return this.#transport.request(

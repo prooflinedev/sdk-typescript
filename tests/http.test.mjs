@@ -1747,6 +1747,23 @@ test("exports preserve CSV cells, opaque cursors and tenant authorization failur
   );
 });
 
+test("export reads default safely to ndjson when query is omitted", async (t) => {
+  const { baseUrl } = await server(t, (_req, res) => {
+    res.writeHead(200, {
+      "Content-Type": "application/x-ndjson",
+      "x-proofline-export-version": "1",
+      "x-proofline-export-settled-until": "2026-11-19T00:00:00Z",
+    });
+    res.end('{"dataset_version":1,"item":"test"}\n');
+  });
+  const client = new ProoflineClient({ baseUrl, token });
+  const page = await client.exportReviews({
+    path: { org_id: orgId, dataset: "findings" },
+  });
+  assert.equal(page.format, "ndjson");
+  assert.equal(page.rows[0].item, "test");
+});
+
 test("export versions follow the dataset", async (t) => {
   const served = {
     findings: [
@@ -2026,7 +2043,11 @@ test("a new public operation generates a callable typed client method", async (t
     },
   };
   await writeFile(join(work, "openapi.public.json"), JSON.stringify(spec));
-  execFileSync("pnpm", ["run", "generate"], { cwd: work });
+  const pnpmCmd = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
+  execFileSync(pnpmCmd, ["run", "generate"], {
+    cwd: work,
+    shell: process.platform === "win32",
+  });
   await writeFile(
     join(work, "src", "example-check.ts"),
     `import type { ProoflineClient } from "./index.js";
@@ -2034,7 +2055,10 @@ export async function answer(client: ProoflineClient): Promise<string> {
   return (await client.readExample({ path: { item: 7 } })).answer;
 }`,
   );
-  execFileSync("pnpm", ["run", "build"], { cwd: work });
+  execFileSync(pnpmCmd, ["run", "build"], {
+    cwd: work,
+    shell: process.platform === "win32",
+  });
   const built = await import(
     pathToFileURL(join(work, "dist", "index.js")).href
   );
