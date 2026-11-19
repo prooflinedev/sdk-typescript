@@ -1564,6 +1564,65 @@ test("pagination keeps filters and refuses cycles, incomplete metadata and resou
   );
 });
 
+test("repository names resolve to IDs without guessing", async (t) => {
+  const otherId = "00000000-0000-7000-8000-000000000006";
+  let body = {
+    repositories: [
+      { id: otherId, full_name: "acme/api" },
+      { id: repoId, full_name: "Acme/App" },
+    ],
+  };
+  const fixture = await server(t, (_request, response) =>
+    json(response, 200, body),
+  );
+  const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
+  assert.equal(await client.resolveRepositoryId(orgId, "Acme/App"), repoId);
+  assert.equal(await client.resolveRepositoryId(orgId, "acme/app"), repoId);
+  assert.equal(
+    fixture.calls[0].url,
+    `/api/v1/organizations/${orgId}/repository-names`,
+  );
+  assert.equal(fixture.calls[0].authorization, `Bearer ${token}`);
+  await assert.rejects(
+    client.resolveRepositoryId(orgId, "acme/web"),
+    (error) =>
+      error instanceof ProoflineError &&
+      error.type === "urn:proofline:sdk:repository-not-found" &&
+      error.detail.includes("acme/web"),
+  );
+  const sent = fixture.calls.length;
+  for (const name of ["app", "acme/app/extra", "/app", "acme/", "acme /app"])
+    await assert.rejects(client.resolveRepositoryId(orgId, name), TypeError);
+  for (const id of ["", "not-a-uuid", `${orgId}/x`, undefined])
+    await assert.rejects(client.resolveRepositoryId(id, "acme/app"), TypeError);
+  assert.equal(fixture.calls.length, sent);
+  body = {
+    repositories: [
+      { id: repoId, full_name: "acme/app" },
+      { id: otherId, full_name: "Acme/App" },
+    ],
+  };
+  assert.equal(await client.resolveRepositoryId(orgId, "Acme/App"), otherId);
+  await assert.rejects(
+    client.resolveRepositoryId(orgId, "ACME/APP"),
+    (error) => error.type === "urn:proofline:sdk:invalid-response",
+  );
+  for (const malformed of [
+    null,
+    {},
+    { repositories: [{ id: repoId }] },
+    { repositories: [{ id: 4, full_name: "acme/app" }] },
+  ]) {
+    body = malformed;
+    await assert.rejects(
+      client.resolveRepositoryId(orgId, "acme/app"),
+      (error) =>
+        error instanceof ProoflineError &&
+        error.type === "urn:proofline:sdk:invalid-response",
+    );
+  }
+});
+
 test("credentials remain on the configured origin and malformed responses carry no raw body", async (t) => {
   for (const baseUrl of [
     "http://customer.example",

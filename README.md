@@ -19,6 +19,19 @@ When no token is passed, the client reads `PROOFLINE_TOKEN`, keeps it in memory,
 
 This repository is the published distribution of the Proofline TypeScript SDK. The public OpenAPI contract in `openapi.public.json` generates `src/operations.ts` and `src/schema.d.ts`. The transport in `src/transport.ts`, client helpers, and tests in `tests/` are hand-written. Open an [issue](https://github.com/prooflinedev/sdk-typescript/issues) for changes to the OpenAPI contract, generated code, or workflows. Pull requests are welcome for the hand-written parts.
 
+## Repository IDs
+
+Repository operations take Proofline's repository UUID, not the provider's `owner/name`. `resolveRepositoryId` looks the name up once with `listRepositories`, ignoring case as GitHub does:
+
+```typescript
+const repositoryId = await client.resolveRepositoryId(organizationId, "acme/app");
+await client.requestReview({
+  path: { org_id: organizationId, repo_id: repositoryId, number: 12 },
+});
+```
+
+Keep the ID rather than the name, since a rename changes `full_name` but not `id`. An organization ID that is not a UUID, or a name that is not a single `owner/name` pair, throws a `TypeError` before any request. A repository the token cannot see, including one outside a repository-restricted token's allowlist, throws `ProoflineError` with the type `urn:proofline:sdk:repository-not-found`.
+
 ## Errors and refusals
 
 A refused request throws `ProoflineError` with the server problem's `status`, `type`, `title` and `detail`. When a review request creates nothing, the error also carries `refusal`, whose `reason` names the setting to change, such as `NO_LINKED_ENVIRONMENT` or `ENVIRONMENT_NOT_READY`, and `repositoryName`. A refusal that does not match the public contract keeps its status, `title` and `detail` with the type `urn:proofline:sdk:invalid-response` and no `refusal`. Any other status, such as the 402 a review request answers when credits cannot pay, is a plain problem with no `refusal`. The token is redacted from every text field, and `String(error)`, `inspect(error)` and `JSON.stringify(error)` show only the status.

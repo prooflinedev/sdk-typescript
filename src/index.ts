@@ -121,6 +121,54 @@ export class ProoflineClient extends Operations {
     );
   }
 
+  /**
+   * Resolves a repository's `owner/name` to its stable Proofline ID.
+   *
+   * The comparison ignores case, as GitHub's does. A name the token cannot
+   * see, including one outside a repository-restricted token's allowlist,
+   * throws `urn:proofline:sdk:repository-not-found`.
+   */
+  async resolveRepositoryId(orgId: string, fullName: string): Promise<string> {
+    if (
+      typeof orgId !== "string" ||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+        orgId,
+      )
+    )
+      throw new TypeError("organization ID must be a UUID");
+    if (typeof fullName !== "string" || !/^[^/\s]+\/[^/\s]+$/.test(fullName))
+      throw new TypeError("repository must be an owner/name pair");
+    const page = await this.listRepositories({ path: { org_id: orgId } });
+    if (
+      !isObject(page) ||
+      !Array.isArray(page.repositories) ||
+      !page.repositories.every(
+        (repository) =>
+          isObject(repository) &&
+          typeof repository.id === "string" &&
+          typeof repository.full_name === "string",
+      )
+    )
+      throw protocol("the repository list has no typed repositories");
+    const wanted = fullName.toLowerCase();
+    const matches = page.repositories.filter(
+      (repository) => repository.full_name.toLowerCase() === wanted,
+    );
+    const exact = matches.filter(
+      (repository) => repository.full_name === fullName,
+    );
+    const match = matches.length === 1 ? matches[0] : exact[0];
+    if (matches.length > 1 && exact.length !== 1)
+      throw protocol(`the repository list names ${fullName} more than once`);
+    if (match === undefined)
+      throw new ProoflineError(
+        0,
+        "urn:proofline:sdk:repository-not-found",
+        `${fullName} is not a connected repository this token can see`,
+      );
+    return match.id;
+  }
+
   async *iterReviews(
     parameters: ListReviewsParameters,
     options: { maxPages?: number; maxItems?: number } = {},
