@@ -73,7 +73,7 @@ export interface paths {
         };
         /**
          * Preview a coding-agent session
-         * @description Returns the exact prompt and target a coding-agent session on this pull request finding would send, with every protected value withheld, and the prompt digest a start names. Requires access to every repository in the review.
+         * @description Returns the exact prompt and target a coding-agent session on this pull request finding would send, with every protected value withheld, the prompt digest a start names, and the ID and vendor of each active connection that allowlists the target repository. Requires access to every repository in the review.
          */
         get: operations["get_agent_session_prompt"];
         put?: never;
@@ -557,7 +557,23 @@ export interface components {
             /** @description The session in the vendor's console. */
             vendor_url?: string | null;
         };
+        /** @description A vendor connection a session on the previewed target may use. */
+        AgentSessionConnection: {
+            /**
+             * Format: uuid
+             * @description The connection's ID, which a start names as `connection_id`.
+             */
+            id: string;
+            /** @description The coding-agent vendor. */
+            vendor: components["schemas"]["AgentVendor"];
+        };
         AgentSessionPrompt: {
+            /**
+             * @description The organization's active vendor connections that allowlist the
+             *      target repository; absent when none does. A start names one of
+             *      them as `connection_id`.
+             */
+            connections?: components["schemas"]["AgentSessionConnection"][];
             /**
              * @description SHA-256 of `untrusted_text`. A start names it, so the session
              *      sends what the person confirmed.
@@ -1567,6 +1583,12 @@ export interface components {
             /** @description The author's profile on the deployment's GitHub host. Absent when no author login is known. */
             pull_request_author_url?: string | null;
             /**
+             * @description Whether the pull request is a draft, as provider state last reported
+             *      it. Display state only: an open draft keeps `pull_request_state` `OPEN`.
+             *      Absent when `pull_request_state` is.
+             */
+            pull_request_draft?: boolean | null;
+            /**
              * Format: int64
              * @description The pull request number. Absent for a deployment or patch review.
              */
@@ -1584,6 +1606,14 @@ export interface components {
             pull_request_title?: string | null;
             /** @description The pull request on GitHub. Absent for a deployment review or when the repository is unknown. */
             pull_request_url?: string | null;
+            /**
+             * @description Why Proofline answers no question about this run: `FORK_PULL_REQUEST`
+             *      when the pull request is recorded as coming from a fork, whose
+             *      conversations the fork policy excludes whatever the run. Absent
+             *      otherwise, which does not mean a question will be answered: each one
+             *      is still checked for access and retained evidence.
+             */
+            questions_unavailable_reason?: components["schemas"]["QuestionsUnavailableReason"] | null;
             /**
              * @description How this review decided what it reviews after a push or a full-review
              *      request. Absent for a review that refreshes nothing, and while a
@@ -2626,6 +2656,8 @@ export interface components {
             /** @description The current gate projection, including a recorded bypass or supersession by a newer head. */
             status: components["schemas"]["GateStatus"];
         };
+        /** @enum {string} */
+        QuestionsUnavailableReason: "FORK_PULL_REQUEST";
         /** @description A recorded refresh decision, as the console shows it. */
         RefreshView: {
             /**
@@ -3082,6 +3114,12 @@ export interface components {
             pull_request_author_name?: string | null;
             /** @description The author's profile on the deployment's GitHub host. Absent when no author login is known. */
             pull_request_author_url?: string | null;
+            /**
+             * @description Whether the pull request is a draft, as provider state last reported
+             *      it. Display state only: an open draft keeps `pull_request_state` `OPEN`.
+             *      Absent when `pull_request_state` is.
+             */
+            pull_request_draft?: boolean | null;
             /**
              * Format: int64
              * @description The pull request number. Absent for a deployment or patch review.
