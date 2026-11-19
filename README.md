@@ -38,6 +38,28 @@ try {
 }
 ```
 
+## Failing a job on open findings
+
+`gateReview(outcome, { failOn })` measures a `ReviewOutcome` against a `WARNING` or `SERIOUS` threshold with the rules of `proofline ci review --fail-on`, so a Node pipeline fails the same way the CLI does.
+
+```typescript
+import { gateReview } from "@proofline/sdk";
+
+const outcome = await client.waitForReview(organizationId, reviewId);
+const result = gateReview(outcome, { failOn: "SERIOUS" });
+if (result !== "NOT_REACHED") {
+  console.error(`Proofline: ${result}, ${outcome.reviewUrl}`);
+  process.exitCode = { REACHED: 3, NOT_COMPLETE: 2, UNAVAILABLE: 4 }[result];
+}
+```
+
+- `REACHED`: the completed review has an open finding at or above the threshold.
+- `NOT_REACHED`: the completed review has none.
+- `NOT_COMPLETE`: the review is incomplete, failed, or stopped, whatever it found.
+- `UNAVAILABLE`: the wait timed out, or the completed review lacks valid open-finding counts, so the threshold cannot be measured.
+
+The server counts open findings from their current decisions, so dismissed findings and unexpired risk acceptances do not count. A code-only finding counts while it is not `RESOLVED` and its complete CODE assessment is of the review's own commits. A severity the SDK does not know reaches every threshold. The exit codes above are the CLI's. The threshold is the caller's and applies to any review; it is separate from the server's opt-in `merge_gate` decision.
+
 ## Coverage uploads
 
 Upload CI coverage reports with a repository-restricted token that holds `coverage:write`. The token holder must have current GitHub write access to that repository. Set `PROOFLINE_TOKEN` to that token and pass the full commit SHA that the tests ran on. The server refuses branch names and abbreviated SHAs.
