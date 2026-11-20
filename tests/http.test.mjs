@@ -1601,6 +1601,13 @@ test("collectReviews gathers paginated review summaries and honors bounds", asyn
   );
   assert.equal(pageIndex, 2);
 
+  const requestsBeforeMaxPages = pageIndex;
+  await assert.rejects(
+    () => client.collectReviews(parameters, { maxPages: 1 }),
+    (error) => error instanceof ProoflineError && error.status === 0,
+  );
+  assert.equal(pageIndex - requestsBeforeMaxPages, 1);
+
   await assert.rejects(
     client.collectReviews(parameters, { maxItems: 1 }),
     (error) =>
