@@ -1366,6 +1366,13 @@ export interface components {
             /** @description The environment assessments this review recorded. */
             assessments: components["schemas"]["CustomerAssessment"][];
             /**
+             * @description The repository audit's mode, `CODE_ONLY` or `INFRASTRUCTURE_AWARE`,
+             *      when this `REVISION_SCAN` is an audit. An audit's findings are in its
+             *      audit report, not in `finding_count` or the review's assessments.
+             *      Null for every other review.
+             */
+            audit_mode?: string | null;
+            /**
              * @description The base branch tip GitHub reported when the review was triggered,
              *      display metadata that differs from `base_commit_sha` when the base
              *      branch moved after the branch point.
@@ -3022,6 +3029,13 @@ export interface components {
              */
             assessment_count: number;
             /**
+             * @description The repository audit's mode, `CODE_ONLY` or `INFRASTRUCTURE_AWARE`,
+             *      when this `REVISION_SCAN` is an audit. An audit's findings are in its
+             *      audit report, not in `finding_count` or the review's assessments.
+             *      Null for every other review.
+             */
+            audit_mode?: string | null;
+            /**
              * Format: date-time
              * @description When the review reached a terminal status. Absent while it is still pending or running.
              */
@@ -4367,6 +4381,11 @@ export interface operations {
                  */
                 attention?: string | null;
                 /**
+                 * @description `only` lists repository audits; `none` leaves them out, so
+                 *      `kind=REVISION_SCAN&audits=none` lists plain revision scans.
+                 */
+                audits?: string | null;
+                /**
                  * @description `mine` for the caller's own pull requests, or a GitHub user ID. `mine`
                  *      needs a person's sign-in or token.
                  */
@@ -4460,6 +4479,11 @@ export interface operations {
                  *      findings, FAILED/INCOMPLETE/STOPPED execution, or an earlier reviewed commit.
                  */
                 attention?: string | null;
+                /**
+                 * @description `only` lists repository audits; `none` leaves them out, so
+                 *      `kind=REVISION_SCAN&audits=none` lists plain revision scans.
+                 */
+                audits?: string | null;
                 /**
                  * @description `mine` for the caller's own pull requests, or a GitHub user ID. `mine`
                  *      needs a person's sign-in or token.
