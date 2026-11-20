@@ -77,6 +77,11 @@ export interface WaitOptions {
   timeoutMs?: number;
 }
 
+export interface CollectReviewsOptions {
+  maxPages?: number;
+  maxItems?: number;
+}
+
 export class ProoflineClient extends Operations {
   readonly #transport: Transport;
   readonly mcp: McpClient;
@@ -168,6 +173,17 @@ export class ProoflineClient extends Operations {
       cursor = page.next_cursor;
     }
     throw paginationLimit("the review collection exceeds maxPages");
+  }
+
+  async collectReviews(
+    parameters: ListReviewsParameters,
+    options: CollectReviewsOptions = {},
+  ): Promise<components["schemas"]["ReviewSummary"][]> {
+    const items: components["schemas"]["ReviewSummary"][] = [];
+    for await (const item of this.iterReviews(parameters, options)) {
+      items.push(item);
+    }
+    return items;
   }
 
   async waitForReview(
