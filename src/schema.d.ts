@@ -1525,6 +1525,15 @@ export interface components {
              */
             kind: string;
             /**
+             * @description What this review's linked-issue receipt recorded, read from the
+             *      receipt and never from current settings, so a later allowlist change
+             *      does not alter it. Null when the review kept no receipt: a kind that
+             *      reads no linked issues, a run that has not prepared its context yet,
+             *      a run that predates receipts, or a receipt that does not decode. Null
+             *      never means that no issue was captured.
+             */
+            linked_issues?: components["schemas"]["LinkedIssueCapture"] | null;
+            /**
              * @description For a patch review requested with `verify_finding_ids`, each finding
              *      it re-verifies against the patch and the outcome. The outcome is
              *      local: the pull request's finding is unchanged whatever it is. Absent
@@ -1786,6 +1795,8 @@ export interface components {
         EnvironmentCheck: {
             /** @description The environment's display name. */
             environment_display_name: string;
+            /** @description The environment's key, which names its console pages. */
+            environment_external_key: string;
             /**
              * @description Why the environment was not checked or does not apply. Null when it
              *      was checked or its check is still running.
@@ -1794,7 +1805,7 @@ export interface components {
             /** @description Whether this review checked the environment. */
             state: components["schemas"]["EnvironmentCheckState"];
         };
-        EnvironmentCheckReason: "NOT_COVERED" | "FORK_PULL_REQUEST" | "UNFINISHED" | "ENDED" | "PULL_REQUEST_REVIEWS_OFF";
+        EnvironmentCheckReason: "NOT_COVERED" | "NO_CLOUD_ACCOUNT" | "READS_REFUSED" | "FORK_PULL_REQUEST" | "UNFINISHED" | "ENDED" | "PULL_REQUEST_REVIEWS_OFF";
         EnvironmentCheckState: "CHECKED" | "CHECKING" | "NOT_CHECKED" | "NOT_APPLICABLE";
         /** @enum {string} */
         ExportEvidenceKind: "repository_file" | "repository_file_at_commit" | "companion_repository_file" | "commit" | "workflow_run" | "world_entity" | "deterministic_test" | "recorded_read" | "text";
@@ -2287,6 +2298,20 @@ export interface components {
          *      recorded it (`incompleteness_kind`), or `UNKNOWN` when none did.
          */
         IncompleteCause: ("NOT_CONFIGURED" | "POLICY_EXCLUDED" | "EVIDENCE_UNAVAILABLE" | "HYPOTHESES_UNRESOLVED" | "MODEL_BUDGET_EXHAUSTED") | "UNKNOWN";
+        /**
+         * @description The count and outcome of a review's linked-issue receipt. Issue numbers,
+         *      titles and the receipt's gaps stay in the receipt.
+         */
+        LinkedIssueCapture: {
+            /**
+             * Format: int64
+             * @description How many issues the review captured as context.
+             */
+            captured_count: number;
+            outcome: components["schemas"]["LinkedIssueOutcome"];
+        };
+        /** @description What the review's linked-issue preparation found. */
+        LinkedIssueOutcome: "NOT_CONFIGURED" | "NO_REFERENCES" | "PREPARED" | "SOURCE_UNAVAILABLE";
         /**
          * @description One finding a patch review re-verified against the patch. The outcome is
          *      local: the pull request's finding is unchanged whatever it is.
