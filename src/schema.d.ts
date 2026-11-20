@@ -455,7 +455,7 @@ export interface paths {
         put?: never;
         /**
          * Stop your local review
-         * @description Stops the holder's own pending or running withheld patch, commit or named-file review. Requires a personal or CLI device token with live GitHub read access to the review's repository. Organization, CI job and MCP OAuth tokens cannot stop reviews. The stopped review retains its findings and exact code identity; requesting the same input returns that stopped review.
+         * @description Stops the holder's own pending or running withheld patch, commit or named-file review. Requires a personal or CLI device token with live GitHub read access to the review's repository. Organization, CI job and MCP OAuth tokens cannot stop reviews. A repository audit is refused on this route: only a person with live GitHub write access stops it, through the audit stop, and no token or platform authority does. The stopped review retains its findings and exact code identity; requesting the same input returns that stopped review.
          */
         post: operations["stop_review"];
         delete?: never;
@@ -1430,6 +1430,11 @@ export interface components {
              * @description When the review reached a terminal status. Absent while it is still pending or running.
              */
             completed_at?: string | null;
+            /**
+             * @description What paid for `cost_microcredits`, read from each debit's own funding
+             *      records. Present exactly when `cost_microcredits` is.
+             */
+            cost_funding?: components["schemas"]["ReviewCostFunding"] | null;
             /**
              * Format: int64
              * @description The credits this run was charged so far, in microcredits, whoever
@@ -2453,7 +2458,10 @@ export interface components {
              * @description Unresolved recorded finding series, including notification-suppressed
              *      findings, decisions whose dismissal or risk acceptance expired, and
              *      earlier published series of the pull request that this review did not
-             *      find again.
+             *      find again, and the supported findings its `KIAN` environment
+             *      assessments published: each violated confirmed gate requirement the
+             *      change does not set and each investigation finding, which have no
+             *      severity.
              */
             open_findings: number;
             /**
@@ -2836,6 +2844,28 @@ export interface components {
              *      session.
              */
             validate_findings: boolean;
+        };
+        /**
+         * @description What paid for a run's credit cost, as Usage splits a day. The three parts
+         *      add up to the cost.
+         */
+        ReviewCostFunding: {
+            /**
+             * Format: int64
+             * @description Paid by the free review month: the same organization's
+             *      `free-review:{debit_id}` grants for the run's debits.
+             */
+            free_review_microcredits: number;
+            /**
+             * Format: int64
+             * @description Taken from the organization's shared credit balance.
+             */
+            organization_microcredits: number;
+            /**
+             * Format: int64
+             * @description Paid by the workspace allowance or the author's seat.
+             */
+            plan_microcredits: number;
         };
         /**
          * @description The depth the applied route plan read a file at.
