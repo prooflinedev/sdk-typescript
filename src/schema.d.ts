@@ -857,6 +857,13 @@ export interface components {
             github_environment?: string | null;
             /** @description Whether any check recorded `REGRESSED`, whatever its gaps. */
             regressed: boolean;
+            /**
+             * @description Present when the deploy is a rollback: the previous deploy of the same
+             *      task ran a commit that a recorded merge into this commit's branch made
+             *      after this commit, as the deploy's console page reads it. Absent for a
+             *      forward deploy and when either merge is unrecorded.
+             */
+            rollback?: components["schemas"]["CommitDeployRollback"] | null;
             /** @description Where the deploy's verification stands. */
             state: components["schemas"]["DeployCoverageState"];
             /**
@@ -879,6 +886,21 @@ export interface components {
              *      Actions.
              */
             workflow_run_id?: number | null;
+        };
+        /** @description What a rollback deploy rolled back, and what it restored. */
+        CommitDeployRollback: {
+            /**
+             * @description The latest earlier deploy of this commit by the same task, before the
+             *      deploys this one rolls back, within 30 days. Absent when the ledger
+             *      holds none.
+             */
+            restores?: components["schemas"]["CommitRollbackDeploy"] | null;
+            /**
+             * @description Each deploy of the same task that landed a commit merged into this
+             *      commit's branch after it, after `restores` and before this deploy,
+             *      newest first.
+             */
+            rolls_back: components["schemas"]["CommitRollbackDeploy"][];
         };
         /**
          * @description The deploys of one commit that Proofline recorded, across the
@@ -922,6 +944,18 @@ export interface components {
              *      routes.
              */
             review_id: string;
+        };
+        /** @description One deploy a rollback names. */
+        CommitRollbackDeploy: {
+            /** @description The commit that deploy ran. */
+            commit_sha: string;
+            /** @description The deploy's console page. */
+            deploy_url?: string | null;
+            /**
+             * Format: date-time
+             * @description When its last deployment first succeeded, or its AWS run ended.
+             */
+            landed_at: string;
         };
         /**
          * @description What a review is counted under: the cause its assessments recorded, or
@@ -1804,6 +1838,12 @@ export interface components {
              */
             subjects: components["schemas"]["SubjectView"][];
             /**
+             * @description Every distinct review Proofline submitted on the pull request for this
+             *      run, including the early code publisher's, oldest first. Absent when it
+             *      submitted none.
+             */
+            submitted_reviews?: components["schemas"]["SubmittedReview"][];
+            /**
              * Format: uuid
              * @description The newer review that superseded this one. Null when none did or the
              *      caller cannot see it.
@@ -1855,6 +1895,13 @@ export interface components {
              *      delay, landing inventory reread, successor wait and transient-read retries.
              */
             due_at: string;
+            /**
+             * @description The gaps this window's check recorded, beside its recorded result;
+             *      empty while no check of this window is recorded. The deploy's `gaps`
+             *      unite those that leave it unproven.
+             * @default []
+             */
+            gaps?: components["schemas"]["DeployVerificationGap"][];
             /** @description The recorded result; absent while no check of this window is recorded. */
             result?: components["schemas"]["DeployCheckResult"] | null;
         };
@@ -3922,6 +3969,12 @@ export interface components {
              * @description The GitHub Actions run of a `GITHUB_WORKFLOW_RUN` subject. Absent for other kinds.
              */
             workflow_run_id?: number | null;
+        };
+        /** @description One review Proofline submitted on the pull request. */
+        SubmittedReview: {
+            /** @description The commit the review was submitted for. */
+            commit_sha?: string | null;
+            url: string;
         };
         /** @enum {string} */
         SummaryRoute: "DETERMINISTIC_ONLY" | "SHORT" | "FULL";

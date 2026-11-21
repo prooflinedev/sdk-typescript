@@ -845,6 +845,17 @@
             "description": "Whether any check recorded `REGRESSED`, whatever its gaps.",
             "type": "boolean"
           },
+          "rollback": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CommitDeployRollback"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Present when the deploy is a rollback: the previous deploy of the same\n task ran a commit that a recorded merge into this commit's branch made\n after this commit, as the deploy's console page reads it. Absent for a\n forward deploy and when either merge is unrecorded."
+          },
           "state": {
             "allOf": [
               {
@@ -884,6 +895,33 @@
           "regressed",
           "checkpoints",
           "gaps"
+        ],
+        "type": "object"
+      },
+      "CommitDeployRollback": {
+        "description": "What a rollback deploy rolled back, and what it restored.",
+        "properties": {
+          "restores": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CommitRollbackDeploy"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The latest earlier deploy of this commit by the same task, before the\n deploys this one rolls back, within 30 days. Absent when the ledger\n holds none."
+          },
+          "rolls_back": {
+            "description": "Each deploy of the same task that landed a commit merged into this\n commit's branch after it, after `restores` and before this deploy,\n newest first.",
+            "items": {
+              "$ref": "#/components/schemas/CommitRollbackDeploy"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "rolls_back"
         ],
         "type": "object"
       },
@@ -943,6 +981,32 @@
         "required": [
           "review_id",
           "existing"
+        ],
+        "type": "object"
+      },
+      "CommitRollbackDeploy": {
+        "description": "One deploy a rollback names.",
+        "properties": {
+          "commit_sha": {
+            "description": "The commit that deploy ran.",
+            "type": "string"
+          },
+          "deploy_url": {
+            "description": "The deploy's console page.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "landed_at": {
+            "description": "When its last deployment first succeeded, or its AWS run ended.",
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "commit_sha",
+          "landed_at"
         ],
         "type": "object"
       },
@@ -2333,6 +2397,13 @@
             },
             "type": "array"
           },
+          "submitted_reviews": {
+            "description": "Every distinct review Proofline submitted on the pull request for this\n run, including the early code publisher's, oldest first. Absent when it\n submitted none.",
+            "items": {
+              "$ref": "#/components/schemas/SubmittedReview"
+            },
+            "type": "array"
+          },
           "superseded_by_review_id": {
             "description": "The newer review that superseded this one. Null when none did or the\n caller cannot see it.",
             "format": "uuid",
@@ -2471,6 +2542,14 @@
             "description": "When a missing check becomes overdue, allowing the workflow's read\n delay, landing inventory reread, successor wait and transient-read retries.",
             "format": "date-time",
             "type": "string"
+          },
+          "gaps": {
+            "default": [],
+            "description": "The gaps this window's check recorded, beside its recorded result;\n empty while no check of this window is recorded. The deploy's `gaps`\n unite those that leave it unproven.",
+            "items": {
+              "$ref": "#/components/schemas/DeployVerificationGap"
+            },
+            "type": "array"
           },
           "result": {
             "anyOf": [
@@ -6774,6 +6853,25 @@
         ],
         "type": "object"
       },
+      "SubmittedReview": {
+        "description": "One review Proofline submitted on the pull request.",
+        "properties": {
+          "commit_sha": {
+            "description": "The commit the review was submitted for.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "type": "object"
+      },
       "SummaryRoute": {
         "enum": [
           "DETERMINISTIC_ONLY",
@@ -7045,7 +7143,7 @@
   },
   "info": {
     "title": "Proofline Review API",
-    "version": "7.2.0"
+    "version": "7.3.0"
   },
   "openapi": "3.1.0",
   "paths": {
