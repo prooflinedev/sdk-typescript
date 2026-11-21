@@ -435,7 +435,7 @@ export interface paths {
         put?: never;
         /**
          * Rerun a review
-         * @description Creates a new run of the review's original immutable code subject and leaves earlier runs unchanged. A local patch review is not rerun. Requires live GitHub write access; a repeated request can create another run, so clients make one attempt.
+         * @description Creates a new run of the review's original immutable code subject and leaves earlier runs unchanged. Local patch, commit, named-file, merge-group and deployment reviews, repository audits and on-demand scans are not rerun and return 400. Requires live GitHub write access; a repeated request can create another run, so clients make one attempt.
          */
         post: operations["rerun_review"];
         delete?: never;
