@@ -1747,6 +1747,99 @@ test("exports preserve CSV cells, opaque cursors and tenant authorization failur
   );
 });
 
+test("iterExportPages follows opaque cursors lazily and preserves filters", async (t) => {
+  const { baseUrl, calls } = await server(t, (request, response) => {
+    const url = new URL(request.url, "http://x");
+    const cursor = url.searchParams.get("cursor");
+    const nextCursor =
+      cursor === null ? "opaque/+cursor" : cursor === "opaque/+cursor" ? "second" : null;
+    response.writeHead(200, {
+      "content-type": "application/x-ndjson",
+      "x-proofline-export-version": "1",
+      "x-proofline-export-settled-until": "2026-10-25T00:00:00Z",
+      ...(nextCursor === null ? {} : { "x-proofline-export-next-cursor": nextCursor }),
+    });
+    response.end(`${JSON.stringify({ dataset_version: 1, cursor: cursor ?? "first" })}\n`);
+  });
+  const client = new ProoflineClient({ baseUrl, token });
+  const parameters = {
+    path: { org_id: orgId, dataset: "reviews" },
+    query: {
+      from: "2026-10-01T00:00:00Z",
+      to: "2026-10-25T00:00:00Z",
+      format: "ndjson",
+    },
+  };
+  const iterator = client.iterExportPages(parameters);
+  assert.deepEqual((await iterator.next()).value.rows[0].cursor, "first");
+  assert.equal(calls.length, 1);
+  assert.deepEqual((await iterator.next()).value.rows[0].cursor, "opaque/+cursor");
+  assert.equal(calls.length, 2);
+  const last = await iterator.next();
+  assert.deepEqual(last.value.rows[0].cursor, "second");
+  assert.equal(last.done, false);
+  assert.equal((await iterator.next()).done, true);
+  assert.equal(calls.length, 3);
+  for (const call of calls) {
+    const url = new URL(call.url, baseUrl);
+    assert.equal(url.searchParams.get("from"), parameters.query.from);
+    assert.equal(url.searchParams.get("to"), parameters.query.to);
+    assert.equal(url.searchParams.get("format"), "ndjson");
+  }
+  assert.equal(new URL(calls[1].url, baseUrl).searchParams.get("cursor"), "opaque/+cursor");
+});
+
+test("iterExportPages refuses cursor loops and exhausted page bounds", async (t) => {
+  const { baseUrl: cycleBaseUrl } = await server(t, (_request, response) => {
+    response.writeHead(200, {
+      "content-type": "application/x-ndjson",
+      "x-proofline-export-version": "1",
+      "x-proofline-export-settled-until": "2026-10-25T00:00:00Z",
+      "x-proofline-export-next-cursor": "same",
+    });
+    response.end('{"dataset_version":1}\n');
+  });
+  const client = new ProoflineClient({ baseUrl: cycleBaseUrl, token });
+  await assert.rejects(
+    Array.fromAsync(
+      client.iterExportPages({
+        path: { org_id: orgId, dataset: "reviews" },
+        query: { from: "2026-10-01T00:00:00Z", to: "2026-10-25T00:00:00Z" },
+      }),
+    ),
+    (error) =>
+      error instanceof ProoflineError &&
+      error.type === "urn:proofline:sdk:invalid-response",
+  );
+
+  let boundedPage = 0;
+  const { baseUrl: boundedBaseUrl } = await server(t, (_request, response) => {
+    boundedPage += 1;
+    response.writeHead(200, {
+      "content-type": "application/x-ndjson",
+      "x-proofline-export-version": "1",
+      "x-proofline-export-settled-until": "2026-10-25T00:00:00Z",
+      "x-proofline-export-next-cursor": `next-${boundedPage}`,
+    });
+    response.end('{"dataset_version":1}\n');
+  });
+  const boundedClient = new ProoflineClient({ baseUrl: boundedBaseUrl, token });
+  await assert.rejects(
+    Array.fromAsync(
+      boundedClient.iterExportPages(
+        {
+          path: { org_id: orgId, dataset: "reviews" },
+          query: { from: "2026-10-01T00:00:00Z", to: "2026-10-25T00:00:00Z" },
+        },
+        { maxPages: 2 },
+      ),
+    ),
+    (error) =>
+      error instanceof ProoflineError &&
+      error.type === "urn:proofline:sdk:pagination-limit",
+  );
+});
+
 test("export versions follow the dataset", async (t) => {
   const served = {
     findings: [
