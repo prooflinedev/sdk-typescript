@@ -10,6 +10,7 @@ export type StartAgentSessionBody = NonNullable<paths["/api/v1/organizations/{or
 export type GetFindingFixPromptParameters = paths["/api/v1/organizations/{org_id}/findings/{finding_id}/fix-prompt"]["get"]["parameters"];
 export type RequestCommitReviewParameters = paths["/api/v1/organizations/{org_id}/repositories/{repo_id}/commit-reviews"]["post"]["parameters"];
 export type RequestCommitReviewBody = NonNullable<paths["/api/v1/organizations/{org_id}/repositories/{repo_id}/commit-reviews"]["post"]["requestBody"]>["content"]["application/json"];
+export type GetCommitDeployVerificationsParameters = paths["/api/v1/organizations/{org_id}/repositories/{repo_id}/commits/{commit_sha}/deploy-verifications"]["get"]["parameters"];
 export type UploadCoverageReportsParameters = paths["/api/v1/organizations/{org_id}/repositories/{repo_id}/coverage-reports"]["post"]["parameters"];
 export type UploadCoverageReportsBody = NonNullable<paths["/api/v1/organizations/{org_id}/repositories/{repo_id}/coverage-reports"]["post"]["requestBody"]>["content"]["application/json"];
 export type RequestFileReviewParameters = paths["/api/v1/organizations/{org_id}/repositories/{repo_id}/file-reviews"]["post"]["parameters"];
@@ -57,6 +58,10 @@ export class Operations {
 
   requestCommitReview(parameters: RequestCommitReviewParameters, body: RequestCommitReviewBody): Promise<components["schemas"]["CommitReviewResponse"]> {
     return this.invoke("POST", "/api/v1/organizations/{org_id}/repositories/{repo_id}/commit-reviews", parameters, body);
+  }
+
+  getCommitDeployVerifications(parameters: GetCommitDeployVerificationsParameters): Promise<components["schemas"]["CommitDeployVerifications"]> {
+    return this.invoke("GET", "/api/v1/organizations/{org_id}/repositories/{repo_id}/commits/{commit_sha}/deploy-verifications", parameters);
   }
 
   uploadCoverageReports(parameters: UploadCoverageReportsParameters, body: UploadCoverageReportsBody): Promise<components["schemas"]["CoverageUploadResponse"]> {

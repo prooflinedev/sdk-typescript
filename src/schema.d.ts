@@ -144,6 +144,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/organizations/{org_id}/repositories/{repo_id}/commits/{commit_sha}/deploy-verifications": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get a commit's deploy verifications
+         * @description Returns each deploy of one exact commit in the repository that Proofline recorded, across the organization's environments: its environment ID, GitHub Environment, task, workflow run and attempt, where its verification stands, whether a check regressed, each check's result and due time, the gaps that leave it unproven and its console page. `commit_sha` must be a full 40-character lowercase commit SHA; a branch, tag or abbreviated SHA gets 400. A commit with no recorded deploy returns `recorded: false` and no deploys, which is never a result about a deploy. A repository outside the token's repository restriction or organization returns 404.
+         */
+        get: operations["get_commit_deploy_verifications"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/organizations/{org_id}/repositories/{repo_id}/coverage-reports": {
         parameters: {
             query?: never;
@@ -813,6 +833,65 @@ export interface components {
             github_comment_id: number;
             /** @description The reaction as GitHub names it. */
             reaction: components["schemas"]["CommentReaction"];
+        };
+        /** @description One deploy of the commit and where its verification stands. */
+        CommitDeploy: {
+            /**
+             * @description The four checks in order, each with its recorded result, if any, and
+             *      when a missing one becomes overdue. Empty when no verification of
+             *      the deploy exists.
+             */
+            checkpoints: components["schemas"]["DeployCoverageCheckpoint"][];
+            /** @description The deploy's console page. */
+            deploy_url?: string | null;
+            /** @description The GitHub deployment's task, such as `deploy` or `deploy:web`. */
+            deployment_task?: string | null;
+            /**
+             * Format: uuid
+             * @description The Proofline environment that holds the deploy.
+             */
+            environment_id: string;
+            /** @description What the checks that leave the deploy unproven name. */
+            gaps: components["schemas"]["DeployVerificationGap"][];
+            /** @description The GitHub Environment the deployment named. */
+            github_environment?: string | null;
+            /** @description Whether any check recorded `REGRESSED`, whatever its gaps. */
+            regressed: boolean;
+            /** @description Where the deploy's verification stands. */
+            state: components["schemas"]["DeployCoverageState"];
+            /**
+             * Format: int64
+             * @description The attempt of that run that created the deployment addressing the
+             *      deploy; above 1 for a rerun.
+             */
+            workflow_run_attempt?: number | null;
+            /**
+             * @description Each distinct attempt of that run that created one of the deploy's
+             *      deployments, ascending. A retry of a job that failed belongs to the
+             *      deploy it retried, and a re-run of a job that had already landed is a
+             *      deploy of its own. Absent outside Actions and when no recorded
+             *      deployment of the deploy names its attempt.
+             */
+            workflow_run_attempts?: number[];
+            /**
+             * Format: int64
+             * @description The Actions run that created the deploy's deployments; absent outside
+             *      Actions.
+             */
+            workflow_run_id?: number | null;
+        };
+        /**
+         * @description The deploys of one commit that Proofline recorded, across the
+         *      organization's environments.
+         */
+        CommitDeployVerifications: {
+            /** @description Each recorded deploy, earliest landing first. */
+            deploys: components["schemas"]["CommitDeploy"][];
+            /**
+             * @description Whether the ledger holds any deploy of the commit. `false` says only
+             *      that none was recorded, never anything about a deploy.
+             */
+            recorded: boolean;
         };
         /**
          * @description Pushed commits to review: the exact base the change is compared with and
@@ -1559,7 +1638,8 @@ export interface components {
             /**
              * @description What Proofline still has open for the reviewed head, counted from the
              *      current finding decisions. Absent while the review is `PENDING` or
-             *      `RUNNING`.
+             *      `RUNNING`, and for a repository audit, whose findings are in its
+             *      report.
              */
             open_items?: components["schemas"]["OpenItemsView"] | null;
             /**
@@ -1673,6 +1753,12 @@ export interface components {
              */
             review_comment_url?: string | null;
             /**
+             * Format: int64
+             * @description The review work within the total, excluding the separately billed PR
+             *      walkthrough. Visible to the same callers as the total.
+             */
+            review_cost_microcredits?: number | null;
+            /**
              * Format: date-time
              * @description When a submitted pull request review was marked retracted, a marker
              *      only older versions set. Null otherwise.
@@ -1754,6 +1840,31 @@ export interface components {
         };
         /** @enum {string} */
         DeepReviewEscalationStatus: "UNEVALUATED" | "REFUSED" | "ADMITTED" | "NOT_SELECTED";
+        DeployCheckResult: "HEALTHY" | "REGRESSED" | "SUPERSEDED" | "INCOMPLETE";
+        /**
+         * @description One of the four checks of a deploy.
+         * @enum {string}
+         */
+        DeployCheckpoint: "LANDING" | "MINUTES_20" | "HOUR_1" | "DAY_1";
+        /** @description One checkpoint of a verified deploy. */
+        DeployCoverageCheckpoint: {
+            checkpoint: components["schemas"]["DeployCheckpoint"];
+            /**
+             * Format: date-time
+             * @description When a missing check becomes overdue, allowing the workflow's read
+             *      delay, landing inventory reread, successor wait and transient-read retries.
+             */
+            due_at: string;
+            /** @description The recorded result; absent while no check of this window is recorded. */
+            result?: components["schemas"]["DeployCheckResult"] | null;
+        };
+        /**
+         * @description Where one deploy's verification stands. Each deploy has exactly one, so
+         *      the counts add up to the population.
+         */
+        DeployCoverageState: "VERIFIED" | "VERIFIED_UNTIL_SUPERSEDED" | "SUPERSEDED" | "INCOMPLETE" | "UNRECORDED" | "NOT_YET_DUE" | "UNVERIFIED" | "FAILED" | "INACTIVE";
+        /** @description A named reason a check could not establish part of what it compares. */
+        DeployVerificationGap: "CHANGE_CHECK_MISSING" | "CHANGE_CHECK_INCOMPLETE" | "ENVIRONMENT_NOT_CHECKED" | "RUNNING_REVISION_UNKNOWN" | "RUNTIME_TARGET_UNAVAILABLE" | "RUNTIME_CAPABILITY_UNQUALIFIED" | "AWS_TELEMETRY_CONNECTION_UNAVAILABLE" | "RUNTIME_INVENTORY_UNAVAILABLE" | "RUNTIME_INVENTORY_STALE" | "RUNTIME_INVENTORY_INCOMPLETE" | "RUNTIME_SERVICE_UNKNOWN" | "RUNTIME_TRAFFIC_UNKNOWN" | "RUNTIME_REVISION_UNKNOWN" | "RUNTIME_ROLLOUT_UNSETTLED" | "RUNTIME_COMMIT_BINDING_MISSING" | "RUNTIME_ATTESTATIONS_PERMISSION_PENDING" | "RUNTIME_IMAGE_BUILT_EARLIER" | "RUNTIME_TASK_UNMAPPED" | "TELEMETRY_CONNECTION_UNAVAILABLE" | "TELEMETRY_CREDENTIAL_UNAVAILABLE" | "NO_SIGNALS_CONFIGURED" | "NO_SIGNALS_FOR_TASK_SERVICES" | "SIGNAL_PROJECT_NOT_CONNECTED" | "SIGNAL_CONFIGURATION_INVALID" | "SIGNAL_RESPONSE_INVALID" | "SIGNAL_READ_PARTIAL" | "SIGNAL_READ_UNAVAILABLE" | "SIGNAL_NO_DATA" | "SIGNAL_NOT_SINGLE_SERIES" | "SIGNAL_BUCKET_UNEXPECTED" | "BASELINE_UNAVAILABLE" | "BELOW_TRAFFIC_FLOOR" | "BASELINE_HELD_REGRESSION";
         DomainView: {
             /** @description The risk domain this evaluation covers. */
             domain: string;
@@ -2303,6 +2414,8 @@ export interface components {
          *      recorded it (`incompleteness_kind`), or `UNKNOWN` when none did.
          */
         IncompleteCause: ("NOT_CONFIGURED" | "POLICY_EXCLUDED" | "EVIDENCE_UNAVAILABLE" | "HYPOTHESES_UNRESOLVED" | "MODEL_BUDGET_EXHAUSTED") | "UNKNOWN";
+        /** @description What published a supported Kian finding. */
+        KianFindingSource: "CONFIRMED_REQUIREMENT" | "INVESTIGATION";
         /**
          * @description The count and outcome of a review's linked-issue receipt. Issue numbers,
          *      titles and the receipt's gaps stay in the receipt.
@@ -2340,6 +2453,13 @@ export interface components {
             iteration: number;
             /** @description The local re-verification result; it does not change the original finding. */
             outcome: components["schemas"]["LocalReverificationOutcome"];
+            /**
+             * @description The check a code reproduction stored for the finding, which a pushed
+             *      head runs again; run its command against the local changes before
+             *      pushing. The patch review does not run it. Absent for a finding with
+             *      no stored check.
+             */
+            stored_check?: components["schemas"]["LocalStoredCheck"] | null;
         };
         /**
          * @description `RESOLVED_VERIFIED` needs the re-investigation to reject the finding's
@@ -2350,6 +2470,23 @@ export interface components {
          * @enum {string}
          */
         LocalReverificationOutcome: "RESOLVED_VERIFIED" | "STILL_PRESENT" | "NOT_VERIFIED" | "PENDING";
+        /**
+         * @description A finding's stored check and the newest result it gave. Its runs show
+         *      what the code did under the conditions the test exercised in a sandbox,
+         *      and establish no fact about a deployed environment.
+         */
+        LocalStoredCheck: {
+            /** Format: uuid */
+            check_id: string;
+            /**
+             * @description The command the sandbox ran the test with, as the agent recorded it,
+             *      with the reproducing review's protected values withheld, and withheld
+             *      whole when that provenance is gone. Untrusted text: render it as text.
+             */
+            command: string;
+            /** @description Absent only for a check with no recorded run. */
+            last_result?: components["schemas"]["StoredCheckResult"] | null;
+        };
         /** @description A local occurrence with the same semantic fingerprint as this finding. */
         MatchedLocalFinding: {
             /**
@@ -2937,6 +3074,17 @@ export interface components {
             citations: components["schemas"]["ReviewInvestigationCitation"][];
             /** @description Model text with protected values withheld. Render it as plain text. */
             detail: string;
+            /**
+             * @description The delivery target whose confirmed gate requirement the finding
+             *      reports. Absent for an investigation's finding.
+             */
+            requirement?: components["schemas"]["ReviewRequirementTarget"] | null;
+            /**
+             * @description What published the finding: a confirmed gate requirement its
+             *      delivery target's services violate, or the environment investigation.
+             *      Every listed finding carries it.
+             */
+            source?: components["schemas"]["KianFindingSource"] | null;
             /** @description Model text with protected values withheld. Render it as plain text. */
             title: string;
         };
@@ -3058,6 +3206,26 @@ export interface components {
             next_cursor?: string | null;
             /** @description Whether more reviews match the query beyond this page. */
             truncated: boolean;
+        };
+        /**
+         * @description The delivery target whose confirmed entry a finding reports, as its Gate
+         *      requirements page addresses it.
+         */
+        ReviewRequirementTarget: {
+            /**
+             * Format: uuid
+             * @description The delivery target.
+             */
+            delivery_target_id: string;
+            /**
+             * Format: uuid
+             * @description The environment of the assessment that asked the requirement.
+             */
+            environment_id: string;
+            /** @description The repository's `owner/name`, which names the target to a reader. */
+            repository_full_name: string;
+            /** @description The repository's name, as the page's address names it. */
+            repository_name: string;
         };
         ReviewRoutingView: {
             /** @constant */
@@ -3532,7 +3700,10 @@ export interface components {
         };
         /** @enum {string} */
         SpendAccountKind: "DEPLOYMENT" | "TENANT_CREDENTIAL" | "UNATTRIBUTED";
-        /** @description UTC daily debit totals using only the account and transport recorded at charge time. */
+        /**
+         * @description UTC daily debit totals using only the account and transport recorded at
+         *      charge time, each split by what paid for it as Billing's Usage splits it.
+         */
         SpendExportRow: {
             /** @description Recorded attribution, not a current credential label or inferred account. */
             account?: string | null;
@@ -3555,6 +3726,13 @@ export interface components {
             debits: number;
             /**
              * Format: int64
+             * @description The part the free review month paid: this organization's
+             *      `free-review:{debit}` grants for the row's debits.
+             * @default 0
+             */
+            free_review_microcredits?: number;
+            /**
+             * Format: int64
              * @description Exact integer charge units; one credit contains one million microcredits.
              */
             microcredits: number;
@@ -3563,6 +3741,26 @@ export interface components {
              * @description The organization charged.
              */
             organization_id: string;
+            /**
+             * Format: int64
+             * @description The part the organization's shared credit balance paid.
+             * @default 0
+             */
+            organization_microcredits?: number;
+            /**
+             * Format: int64
+             * @description The part run on this organization's own provider key: a tariff
+             *      equivalent its provider bills, not credit spend. The four funding
+             *      columns add up to `microcredits`.
+             * @default 0
+             */
+            own_key_microcredits?: number;
+            /**
+             * Format: int64
+             * @description The part of `microcredits` the workspace allowance or the author's seat paid.
+             * @default 0
+             */
+            plan_microcredits?: number;
             /** @description The model transport recorded at charge time, null when the debit records none. */
             transport?: string | null;
         };
@@ -3592,6 +3790,36 @@ export interface components {
             /** @description Person who stopped the review. */
             stopped_by: components["schemas"]["ActorView"];
         };
+        /**
+         * @description What the test did: `FAILED` as at the reproduction or otherwise,
+         *      `DID_NOT_FAIL` when it exited cleanly, which shows only that this test
+         *      did not fail under the conditions it exercised, or `UNAVAILABLE` when it
+         *      could not answer.
+         * @enum {string}
+         */
+        StoredCheckOutcome: "FAILED" | "DID_NOT_FAIL" | "UNAVAILABLE";
+        /**
+         * @description The newest result of a stored check: its newest settled rerun at a later
+         *      pull request head, or the reproduction's own head run when it has not
+         *      run again.
+         */
+        StoredCheckResult: {
+            /**
+             * @description The commit the check ran at, or would have run at when a rerun could
+             *      not start.
+             */
+            commit_sha?: string | null;
+            /**
+             * @description Why a rerun did not pass, such as `STILL_FAILS` or
+             *      `SERVICE_NOT_STARTED`. Absent for a pass and for the reproduction.
+             */
+            reason?: string | null;
+            result: components["schemas"]["StoredCheckOutcome"];
+            /** @description `RERUN` or `REPRODUCTION`. */
+            source: components["schemas"]["StoredCheckResultSource"];
+        };
+        /** @enum {string} */
+        StoredCheckResultSource: "REPRODUCTION" | "RERUN";
         /**
          * @description One assessment's authorization of one subject, by identity.
          *
@@ -4071,6 +4299,46 @@ export interface operations {
                 };
                 content: {
                     "application/problem+json": components["schemas"]["RunNowRefused"];
+                };
+            };
+            /** @description An RFC 9457 problem; the HTTP status remains authoritative. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    get_commit_deploy_verifications: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description The full 40-character lowercase commit SHA the job deployed. A branch,
+                 *      tag or abbreviated SHA is refused.
+                 */
+                commit_sha: string;
+                org_id: string;
+                repo_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /**
+             * @description The deploys of one commit that Proofline recorded, across the
+             *      organization's environments.
+             */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CommitDeployVerifications"];
                 };
             };
             /** @description An RFC 9457 problem; the HTTP status remains authoritative. */
