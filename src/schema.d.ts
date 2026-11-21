@@ -33,7 +33,7 @@ export interface paths {
         };
         /**
          * Export review metadata
-         * @description Returns one page of a version-1 export dataset (`reviews`, `finding_outcomes`, `finding_validations`, `spend` or `findings`) for an RFC3339 window of at most 31 days, as NDJSON by default or CSV. Rows respect the token's repository restriction.
+         * @description Returns one page of an export dataset (`reviews`, `finding_outcomes`, `finding_validations`, `spend` or `findings`) for an RFC3339 window of at most 31 days, as NDJSON by default or CSV. Each dataset has its own row version, which the `X-Proofline-Export-Version` response header states on every page, including a page with no rows. Rows respect the token's repository restriction.
          */
         get: operations["export_reviews"];
         put?: never;
@@ -4159,7 +4159,7 @@ export interface operations {
                     "X-Proofline-Export-Next-Cursor"?: string;
                     /** @description Frozen RFC3339 horizon, five minutes before the first request. */
                     "X-Proofline-Export-Settled-Until": string;
-                    /** @description Dataset version 1. */
+                    /** @description The row version of the selected dataset, sent on every page, including a page with no rows: `reviews` 1, `finding_outcomes` 1, `finding_validations` 2, `spend` 1, `findings` 2. */
                     "X-Proofline-Export-Version": string;
                     [name: string]: unknown;
                 };
