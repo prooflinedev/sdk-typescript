@@ -110,6 +110,31 @@ export class ProoflineClient extends Operations {
     );
   }
 
+  /** Lazily reads every page of an analytics export within a bounded traversal. */
+  async *iterExportPages(
+    parameters: ExportParameters,
+    options: { maxPages?: number } = {},
+  ): AsyncGenerator<ExportPage> {
+    const maxPages = integerLimit(options.maxPages ?? 100, "maxPages");
+    const seen = new Set<string>();
+    let cursor = parameters.query.cursor;
+    if (cursor !== undefined && cursor !== null) seen.add(cursor);
+    for (let index = 0; index < maxPages; index += 1) {
+      const query = {
+        ...parameters.query,
+        ...(cursor === undefined ? {} : { cursor }),
+      };
+      const page = await this.exportReviews({ ...parameters, query });
+      yield page;
+      if (page.nextCursor === null) return;
+      if (!page.nextCursor || seen.has(page.nextCursor))
+        throw protocol("the export collection has no advancing cursor");
+      seen.add(page.nextCursor);
+      cursor = page.nextCursor;
+    }
+    throw paginationLimit("Export");
+  }
+
   /** Reads coverage reports from disk and uploads them in one request. */
   async uploadCoverageFiles(
     parameters: UploadCoverageReportsParameters,
