@@ -38,6 +38,23 @@ try {
 }
 ```
 
+## Waiting for a review of a specific commit
+
+A review request targets a pull request, and the review runs on whichever commit is its head when the request lands. If the branch moves first, the result describes other code. Pass the commit you are about to ship as `headCommitSha`, and `waitForReview` reports `COMPLETED` only for a review of that commit.
+
+```typescript
+const { review_id } = await client.requestReview({
+  path: { org_id: organizationId, repo_id: repositoryId, number: 12 },
+});
+const outcome = await client.waitForReview(organizationId, review_id, {
+  headCommitSha: commitUnderTest,
+});
+if (outcome.status !== "COMPLETED")
+  console.error(outcome.status, outcome.reason, outcome.reviewUrl);
+```
+
+The value must be 40 or 64 hexadecimal characters, upper or lower case. Anything else, `null` included, throws a `TypeError` before the first request. Leaving the option out or passing `undefined` turns the check off. If a read shows the review on a different commit, polling stops there and the result is `INCOMPLETE`, even when the review is still running or has failed, with `HEAD_COMMIT_MISMATCH` as the final gap. A finished review that records no head commit gets `HEAD_COMMIT_UNAVAILABLE` as its final gap and is never `COMPLETED`, while a pending one is polled as usual. A wait that runs out of time keeps its timeout reason and still lists the head gap. For a GitHub Actions run triggered by `pull_request`, `GITHUB_SHA` points at a temporary merge commit rather than the branch head, so pass `github.event.pull_request.head.sha` instead.
+
 ## Coverage uploads
 
 Upload CI coverage reports with a repository-restricted token that holds `coverage:write`. The token holder must have current GitHub write access to that repository. Set `PROOFLINE_TOKEN` to that token and pass the full commit SHA that the tests ran on. The server refuses branch names and abbreviated SHAs.

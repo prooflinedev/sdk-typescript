@@ -75,6 +75,12 @@ export interface ReviewOutcome {
 
 export interface WaitOptions {
   timeoutMs?: number;
+  /**
+   * The commit the result must describe, as 40 or 64 hexadecimal characters.
+   * A review of a different commit stops polling and returns INCOMPLETE, and
+   * a finished review that records no head commit cannot be COMPLETED.
+   */
+  headCommitSha?: string;
 }
 
 export class ProoflineClient extends Operations {
@@ -178,6 +184,15 @@ export class ProoflineClient extends Operations {
     const timeout = options.timeoutMs ?? 20 * 60_000;
     if (!Number.isFinite(timeout) || timeout < 0)
       throw new TypeError("timeoutMs must be finite and nonnegative");
+    const { headCommitSha } = options;
+    // Branch names move and short SHAs can turn ambiguous, so accept only a full SHA.
+    if (
+      headCommitSha !== undefined &&
+      (typeof headCommitSha !== "string" || !FULL_SHA.test(headCommitSha))
+    )
+      throw new TypeError(
+        "headCommitSha must be a full 40 or 64 character hexadecimal SHA",
+      );
     const deadline = performance.now() + timeout;
     const url = this.#transport.reviewUrl(orgId, reviewId);
     let review: Review | null = null;
@@ -189,6 +204,7 @@ export class ProoflineClient extends Operations {
           url,
           review,
           "the review did not finish before timeoutMs",
+          headCommitSha,
         );
       try {
         review = await this.#transport.request<Review>(
@@ -207,6 +223,7 @@ export class ProoflineClient extends Operations {
             url,
             review,
             "the review did not finish before timeoutMs",
+            headCommitSha,
           );
         if (
           error instanceof ProoflineError &&
@@ -218,11 +235,17 @@ export class ProoflineClient extends Operations {
             url,
             review,
             "the review did not finish before timeoutMs",
+            headCommitSha,
           );
         throw error;
       }
       validateReview(review, reviewId);
-      const status = terminal(review);
+      // A review never moves to another commit, so once a read shows a
+      // different one there is nothing left to wait for.
+      const status =
+        headGap(review, headCommitSha) === "HEAD_COMMIT_MISMATCH"
+          ? "INCOMPLETE"
+          : terminal(review);
       if (status !== null)
         return outcome(
           status,
@@ -235,6 +258,7 @@ export class ProoflineClient extends Operations {
                 ? "one or more assessment results are unavailable or unknown"
                 : null
             : null,
+          headCommitSha,
         );
       await sleep(
         Math.min(interval, Math.max(0, deadline - performance.now())),
@@ -279,6 +303,12 @@ const KNOWN_ASSESSMENTS = new Set([
   "EXCLUDED",
 ]);
 const WITHHELD_MARKER = "[withheld: environment value]";
+const FULL_SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i;
+const HEAD_REASONS = {
+  HEAD_COMMIT_MISMATCH: "the review is pinned to another head commit",
+  HEAD_COMMIT_UNAVAILABLE: "the review names no head commit",
+} as const;
+type HeadGap = keyof typeof HEAD_REASONS;
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -428,6 +458,21 @@ function codeAssessment(review: Review): CodeAssessment | null {
   return code;
 }
 
+// Compares the commit a review ran on with the one the caller expects. A
+// missing, empty or non-string head reads as no head rather than a malformed
+// response, so callers who leave the option out never see an error for it.
+function headGap(
+  review: Review,
+  headCommitSha: string | undefined,
+): HeadGap | null {
+  if (headCommitSha === undefined) return null;
+  const head: unknown = review.head_commit_sha;
+  if (typeof head !== "string" || !head) return "HEAD_COMMIT_UNAVAILABLE";
+  return head.toLowerCase() === headCommitSha.toLowerCase()
+    ? null
+    : "HEAD_COMMIT_MISMATCH";
+}
+
 function optionalTexts(value: unknown): boolean {
   return (
     value === undefined ||
@@ -463,6 +508,7 @@ function outcome(
   reviewUrl: string,
   review: Review | null,
   reason: string | null,
+  headCommitSha: string | undefined,
 ): ReviewOutcome {
   const gaps: AssessmentGaps[] = (review?.assessments ?? [])
     .filter(
@@ -559,5 +605,22 @@ function outcome(
       checks: [],
     });
   }
-  return { status, reviewUrl, review, gaps, reason };
+  const head = review && headGap(review, headCommitSha);
+  if (!head) return { status, reviewUrl, review, gaps, reason };
+  gaps.push({
+    assessmentId: "",
+    status: "UNKNOWN",
+    incompletenessKind: null,
+    reasonCodes: [head],
+    releaseEvidenceGap: null,
+    checks: [],
+  });
+  // A timeout keeps its own reason: the head gap is in gaps either way.
+  return {
+    status: status === "COMPLETED" ? "INCOMPLETE" : status,
+    reviewUrl,
+    review,
+    gaps,
+    reason: status === "TIMED_OUT" ? reason : HEAD_REASONS[head],
+  };
 }
