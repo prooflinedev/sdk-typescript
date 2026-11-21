@@ -606,6 +606,136 @@ test("reads honor bounded Retry-After and mutations make one attempt", async (t)
   }
 });
 
+const uuid =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const scanPath = { org_id: orgId, repo_id: repoId };
+const scanned = {
+  resolution_id: "00000000-0000-7000-8000-000000000006",
+  outcome: "EXISTING",
+  review_id: reviewId,
+};
+
+test("scan requests generate one request id and retry lost responses with it", async (t) => {
+  const fixture = await server(t, (request, response, calls) => {
+    if (calls.length === 1) return request.socket.destroy();
+    if (calls.length === 2)
+      return json(
+        response,
+        503,
+        { detail: responseCanary },
+        {
+          "Retry-After": "0",
+        },
+      );
+    return json(response, 200, scanned);
+  });
+  const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
+  const result = await client.scanRevision(
+    { path: scanPath },
+    { ref: "main", budget_credits: 40 },
+  );
+  assert.deepEqual(result, scanned);
+  assert.equal(fixture.calls.length, 3);
+  const bodies = fixture.calls.map((call) => JSON.parse(call.body));
+  assert.match(bodies[0].request_id, uuid);
+  for (const body of bodies)
+    assert.deepEqual(body, {
+      ref: "main",
+      budget_credits: 40,
+      request_id: bodies[0].request_id,
+    });
+  for (const call of fixture.calls) {
+    assert.equal(call.method, "POST");
+    assert.equal(
+      call.url,
+      `/api/v1/organizations/${orgId}/repositories/${repoId}/scans`,
+    );
+    assert.equal(call.authorization, `Bearer ${token}`);
+  }
+  assert(fixture.calls[1].at - fixture.calls[0].at >= 900);
+});
+
+test("scan requests keep a caller request id and use a new one per call", async (t) => {
+  const fixture = await server(t, (_request, response) =>
+    json(response, 200, scanned),
+  );
+  const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
+  const requestId = "00000000-0000-4000-8000-000000000007";
+  await client.scanRevision(
+    { path: scanPath },
+    { commit_sha: "c".repeat(40), budget_credits: 5, request_id: requestId },
+  );
+  await client.scanRevision({ path: scanPath }, { budget_credits: 5 });
+  await client.scanRevision({ path: scanPath }, { budget_credits: 5 });
+  const ids = fixture.calls.map((call) => JSON.parse(call.body).request_id);
+  assert.equal(ids[0], requestId);
+  assert.match(ids[1], uuid);
+  assert.match(ids[2], uuid);
+  assert.notEqual(ids[1], ids[2]);
+});
+
+test("scan retries stop at refusals, bounds and unretried scan requests", async (t) => {
+  let status = 429;
+  let lost = false;
+  const fixture = await server(t, (request, response) => {
+    if (lost) return request.socket.destroy();
+    if (status === 400)
+      return json(response, 400, refused({ reason: "REPOSITORY_DISABLED" }), {
+        "Content-Type": "application/problem+json",
+        "Retry-After": "0",
+      });
+    return json(
+      response,
+      status,
+      { detail: responseCanary },
+      {
+        "Retry-After": "0",
+      },
+    );
+  });
+  const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
+  const body = { ref: "main", budget_credits: 1 };
+  for (const [next, attempts] of [
+    [429, 4],
+    [503, 4],
+    [400, 1],
+    [500, 1],
+  ]) {
+    status = next;
+    const before = fixture.calls.length;
+    await assert.rejects(
+      client.scanRevision({ path: scanPath }, body),
+      (error) => error instanceof ProoflineError && error.status === next,
+    );
+    const calls = fixture.calls.slice(before);
+    assert.equal(calls.length, attempts);
+    assert.equal(
+      new Set(calls.map((call) => JSON.parse(call.body).request_id)).size,
+      1,
+    );
+  }
+  status = 503;
+  const before = fixture.calls.length;
+  await assert.rejects(
+    client.requestScan(
+      { path: scanPath },
+      { ...body, request_id: "00000000-0000-4000-8000-000000000008" },
+    ),
+    (error) => error instanceof ProoflineError && error.status === 503,
+  );
+  assert.equal(fixture.calls.length - before, 1);
+  lost = true;
+  const lostStart = fixture.calls.length;
+  await assert.rejects(
+    client.scanRevision({ path: scanPath }, body),
+    (error) =>
+      error instanceof ProoflineError &&
+      error.status === 0 &&
+      error.type === "urn:proofline:sdk:transport",
+  );
+  assert.equal(fixture.calls.length - lostStart, 4);
+});
+
 const invalidUtf8Body = Buffer.concat([
   Buffer.from(`<html>${responseCanary} ${token}`),
   Buffer.from([0xff]),
