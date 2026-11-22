@@ -864,6 +864,14 @@ export interface components {
              *      forward deploy and when either merge is unrecorded.
              */
             rollback?: components["schemas"]["CommitDeployRollback"] | null;
+            /**
+             * @description Whether the deploy's newest recorded check found its service serving
+             *      an earlier deploy again, as its console page reads it. A later check
+             *      that finds none clears it, while `regressed` keeps an earlier
+             *      regression. Older responses omit it, which reads as false.
+             * @default false
+             */
+            rolled_back?: boolean;
             /** @description Where the deploy's verification stands. */
             state: components["schemas"]["DeployCoverageState"];
             /**
@@ -2274,6 +2282,20 @@ export interface components {
             status: string;
         };
         /**
+         * @description The incident behind a cited prevention rule, as the finding's assessment
+         *      pinned it.
+         */
+        FindingRuleIncidentView: {
+            /** @description What the assessment's pinned Kian view showed of that condition. */
+            check: string;
+            /** @description The commit the incident's confirmed cause names. */
+            commit_sha: string;
+            /** @description What the incident needed in the environment. */
+            condition: string;
+            /** Format: uuid */
+            investigation_id: string;
+        };
+        /**
          * @description One review rule a finding cites. It carries no rule text and no scope
          *      identifier; the review rules page shows those to its readers.
          */
@@ -2288,6 +2310,8 @@ export interface components {
             revisions: components["schemas"]["FindingRuleRevisionView"][];
         };
         FindingRuleRevisionView: {
+            /** @description The incident a prevention rule came from. Absent for every other rule. */
+            incident?: components["schemas"]["FindingRuleIncidentView"] | null;
             /**
              * Format: int32
              * @description The console revision. Null for a configuration-file or implicit rule.
