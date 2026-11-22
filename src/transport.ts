@@ -440,7 +440,7 @@ export class Transport {
   ): Promise<T> {
     const path = Object.entries(parameters.path ?? {}).reduce(
       (value, [key, coordinateValue]) =>
-        value.replace(`{${key}}`, coordinate(coordinateValue)),
+        value.replaceAll(`{${key}}`, coordinate(coordinateValue)),
       template,
     );
     if (/[{}]/.test(path))
