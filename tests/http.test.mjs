@@ -1415,6 +1415,43 @@ test("absent or unusable CODE-only results never complete", async (t) => {
   }
 });
 
+test("wait progress reports validated snapshots, including terminal results", async (t) => {
+  const fixture = await server(t, (_, response) =>
+    json(response, 200, review("COMPLETED")),
+  );
+  const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
+  const snapshots = [];
+  const result = await client.waitForReview(orgId, reviewId, {
+    onProgress(snapshot) {
+      snapshots.push(snapshot.status);
+      // A callback receives a detached snapshot and cannot alter the outcome.
+      snapshot.status = "FAILED";
+    },
+  });
+
+  assert.deepEqual(snapshots, ["COMPLETED"]);
+  assert.equal(result.status, "COMPLETED");
+  assert.equal(result.review.status, "COMPLETED");
+  assert.equal(fixture.calls.length, 1);
+});
+
+test("wait progress callback errors are propagated", async (t) => {
+  const fixture = await server(t, (_, response) =>
+    json(response, 200, review("COMPLETED")),
+  );
+  const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
+  const callbackError = new Error("progress callback failed");
+
+  await assert.rejects(
+    client.waitForReview(orgId, reviewId, {
+      onProgress() {
+        throw callbackError;
+      },
+    }),
+    (error) => error === callbackError,
+  );
+});
+
 test("the wait timeout includes an in-flight request and returns the retained review URL", async (t) => {
   let mode = "pending";
   const fixture = await server(t, (_, response) => {
@@ -1429,15 +1466,23 @@ test("the wait timeout includes an in-flight request and returns the retained re
   });
   const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
   const reviewUrl = `${fixture.baseUrl}/orgs/by-id/${orgId}/reviews/${reviewId}`;
-  const zero = await client.waitForReview(orgId, reviewId, { timeoutMs: 0 });
+  const progress = [];
+  const zero = await client.waitForReview(orgId, reviewId, {
+    timeoutMs: 0,
+    onProgress: (snapshot) => progress.push(snapshot.status),
+  });
   assert.equal(zero.status, "TIMED_OUT");
   assert.equal(zero.review, null);
   assert.equal(zero.reviewUrl, reviewUrl);
   assert.equal(fixture.calls.length, 0);
-  const result = await client.waitForReview(orgId, reviewId, { timeoutMs: 80 });
+  const result = await client.waitForReview(orgId, reviewId, {
+    timeoutMs: 80,
+    onProgress: (snapshot) => progress.push(snapshot.status),
+  });
   assert.equal(result.status, "TIMED_OUT");
   assert.equal(result.review.status, "RUNNING");
   assert.equal(result.reviewUrl, reviewUrl);
+  assert.deepEqual(progress, ["RUNNING"]);
   mode = "no-headers";
   const started = performance.now();
   const transportTimeout = await client.waitForReview(orgId, reviewId, {
