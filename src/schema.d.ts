@@ -966,7 +966,8 @@ export interface components {
             landed_at: string;
         };
         /**
-         * @description What a review is counted under: the cause its assessments recorded, or
+         * @description What a review is counted under: the cause its assessments recorded,
+         *      `SPEND_LIMIT_REACHED` where an assessment recorded a spend limit's code, or
          *      `OUT_OF_CREDITS` where an assessment recorded the credit refusal. An
          *      assessment's detail names that refusal by the rule `public_reason_codes`
          *      applies; no other detail is read into the summary.
@@ -1026,8 +1027,12 @@ export interface components {
             /** @description The commit the reports tested, as the upload named it. */
             tested_sha: string;
         };
-        /** @description The credit refusal, named apart from the `NOT_CONFIGURED` it records. */
-        CreditRefusalCause: "OUT_OF_CREDITS";
+        /**
+         * @description A funding refusal Billing repairs, named apart from the `NOT_CONFIGURED`
+         *      it records. The public contract keeps the name it had when credits were
+         *      its only refusal.
+         */
+        CreditRefusalCause: "OUT_OF_CREDITS" | "SPEND_LIMIT_REACHED";
         CustomerAssessment: {
             /** @description The deterministic World checks recorded for this assessment. */
             checks: components["schemas"]["CustomerChecks"];
@@ -1565,8 +1570,9 @@ export interface components {
             cost_microcredits?: number | null;
             /**
              * @description `incomplete_causes` as the Inbox and the reviews `cause:` search
-             *      count them: `OUT_OF_CREDITS` in place of the `NOT_CONFIGURED` an
-             *      assessment records when credits refused it. Present exactly when
+             *      count them: `OUT_OF_CREDITS` or `SPEND_LIMIT_REACHED` in place of the
+             *      `NOT_CONFIGURED` an assessment records when credits or a monthly spend
+             *      limit refused it. Present exactly when
              *      `incomplete_causes` is.
              */
             counted_incomplete_causes?: components["schemas"]["CountedCause"][];
@@ -3336,8 +3342,9 @@ export interface components {
             completed_at?: string | null;
             /**
              * @description `incomplete_causes` as the Inbox and the reviews `cause:` search
-             *      count them: `OUT_OF_CREDITS` in place of the `NOT_CONFIGURED` an
-             *      assessment records when credits refused it. Present exactly when
+             *      count them: `OUT_OF_CREDITS` or `SPEND_LIMIT_REACHED` in place of the
+             *      `NOT_CONFIGURED` an assessment records when credits or a monthly spend
+             *      limit refused it. Present exactly when
              *      `incomplete_causes` is.
              */
             counted_incomplete_causes?: components["schemas"]["CountedCause"][];
