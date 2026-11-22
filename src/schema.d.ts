@@ -2492,7 +2492,7 @@ export interface components {
          */
         IncompleteCause: ("NOT_CONFIGURED" | "POLICY_EXCLUDED" | "EVIDENCE_UNAVAILABLE" | "HYPOTHESES_UNRESOLVED" | "MODEL_BUDGET_EXHAUSTED") | "UNKNOWN";
         /** @description What published a supported Kian finding. */
-        KianFindingSource: "CONFIRMED_REQUIREMENT" | "INVESTIGATION";
+        KianFindingSource: "CONFIRMED_REQUIREMENT" | "INVESTIGATION" | "SHARED_IDENTITY";
         /**
          * @description The count and outcome of a review's linked-issue receipt. Issue numbers,
          *      titles and the receipt's gaps stay in the receipt.
@@ -3158,8 +3158,9 @@ export interface components {
             requirement?: components["schemas"]["ReviewRequirementTarget"] | null;
             /**
              * @description What published the finding: a confirmed gate requirement its
-             *      delivery target's services violate, or the environment investigation.
-             *      Every listed finding carries it.
+             *      delivery target's services violate, the environment investigation, or
+             *      a workload that loses an access because the change narrows the grants
+             *      of an identity it shares. Every listed finding carries it.
              */
             source?: components["schemas"]["KianFindingSource"] | null;
             /** @description Model text with protected values withheld. Render it as plain text. */
