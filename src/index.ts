@@ -110,6 +110,47 @@ export class ProoflineClient extends Operations {
     );
   }
 
+  /**
+   * Follows an export's cursors, sending each page with the first call's dataset, window,
+   * format and grouping. A repeated cursor raises `urn:proofline:sdk:invalid-pagination`;
+   * a cursor left after `maxPages` (default 100, at most 1,000) raises
+   * `urn:proofline:sdk:pagination-limit`.
+   */
+  async *iterExportPages(
+    parameters: ExportParameters,
+    options: { maxPages?: number } = {},
+  ): AsyncGenerator<ExportPage> {
+    const maxPages = options.maxPages ?? 100;
+    if (!Number.isSafeInteger(maxPages) || maxPages < 1 || maxPages > 1_000)
+      throw new TypeError("maxPages must be an integer from 1 to 1000");
+    // The caller's objects can change while a page is yielded.
+    const path = { ...parameters.path };
+    const query = { ...parameters.query };
+    let cursor = query.cursor ?? null;
+    const seen = new Set<string>(cursor === null ? [] : [cursor]);
+    for (let index = 0; index < maxPages; index += 1) {
+      const page = await this.exportReviews({
+        ...parameters,
+        path,
+        query: { ...query, cursor },
+      });
+      if (page.nextCursor === null) {
+        yield page;
+        return;
+      }
+      if (!page.nextCursor || seen.has(page.nextCursor))
+        throw new ProoflineError(
+          0,
+          "urn:proofline:sdk:invalid-pagination",
+          "the export page has no new continuation cursor",
+        );
+      seen.add(page.nextCursor);
+      cursor = page.nextCursor;
+      yield page;
+    }
+    throw paginationLimit("the export continues past maxPages");
+  }
+
   /** Reads coverage reports from disk and uploads them in one request. */
   async uploadCoverageFiles(
     parameters: UploadCoverageReportsParameters,

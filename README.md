@@ -88,6 +88,19 @@ process.stdout.write(page.text);
 // Continue with query.cursor = page.nextCursor when it is not null.
 ```
 
+`iterExportPages` follows the cursors for you, sending every page with the first call's dataset, window, format and grouping.
+
+```typescript
+for await (const page of client.iterExportPages({
+  path: { org_id: process.env.PROOFLINE_ORGANIZATION_ID!, dataset: "reviews" },
+  query: { from: "2026-10-01T00:00:00Z", to: "2026-10-25T00:00:00Z" },
+})) {
+  for (const row of page.rows) console.log(row);
+}
+```
+
+Set `query.cursor` to resume an export. Iteration stops only when a page has no next cursor, including after a page with no rows. An empty or repeated cursor throws `ProoflineError` with type `urn:proofline:sdk:invalid-pagination`, and the page that carries it is not yielded. The default bound is 100 pages; pass `{ maxPages }` with an integer from 1 to 1000. Running out of pages while a cursor remains throws `urn:proofline:sdk:pagination-limit`, so a partial export never looks complete.
+
 ## MCP organization selection
 
 With an MCP OAuth credential approved for several organizations, call `client.mcp.listOrganizations()` to discover its currently authorized targets. The `KnowledgeResult` retains `isError` and `structuredContent.data.organizations`; each organization entry contains `organization_id`, `github_login`, and `scopes`.

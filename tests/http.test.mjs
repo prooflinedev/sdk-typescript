@@ -1747,6 +1747,78 @@ test("exports preserve CSV cells, opaque cursors and tenant authorization failur
   );
 });
 
+test("export pages follow cursors with the first call's filters, refusing cycles and stopping at the bound", async (t) => {
+  const { baseUrl, calls } = await server(t, (request, response) => {
+    const url = new URL(request.url, "http://sdk.test");
+    const cursor = url.searchParams.get("cursor");
+    const next = url.pathname.endsWith("/reviews")
+      ? cursor
+        ? null
+        : "page-2"
+      : url.pathname.endsWith("/findings")
+        ? "again"
+        : `after-${cursor ?? "start"}`;
+    response.writeHead(200, {
+      "content-type": "application/x-ndjson",
+      "x-proofline-export-version": "1",
+      "x-proofline-export-settled-until": "2026-10-25T00:00:00Z",
+      ...(next ? { "x-proofline-export-next-cursor": next } : {}),
+    });
+    response.end(`{"dataset_version":1,"page":"${cursor ?? "first"}"}\n`);
+  });
+  const client = new ProoflineClient({ baseUrl, token });
+  const query = {
+    from: "2026-10-01T00:00:00Z",
+    to: "2026-10-25T00:00:00Z",
+    group_by: "repository",
+  };
+  const pages = [];
+  const first = {
+    path: { org_id: orgId, dataset: "reviews" },
+    query: { ...query },
+  };
+  for await (const page of client.iterExportPages(first)) {
+    pages.push(page.rows[0].page);
+    first.query.from = "2026-10-20T00:00:00Z";
+  }
+  assert.deepEqual(pages, ["first", "page-2"]);
+  const sent = new URL(calls[1].url, "http://sdk.test").searchParams;
+  assert.deepEqual(
+    ["from", "to", "group_by", "cursor"].map((name) => sent.get(name)),
+    [query.from, query.to, query.group_by, "page-2"],
+  );
+
+  const repeated = [];
+  await assert.rejects(
+    (async () => {
+      for await (const page of client.iterExportPages({
+        path: { org_id: orgId, dataset: "findings" },
+        query,
+      }))
+        repeated.push(page);
+    })(),
+    (error) =>
+      error instanceof ProoflineError &&
+      error.type === "urn:proofline:sdk:invalid-pagination",
+  );
+  assert.equal(repeated.length, 1);
+
+  const bounded = [];
+  await assert.rejects(
+    (async () => {
+      for await (const page of client.iterExportPages(
+        { path: { org_id: orgId, dataset: "finding_validations" }, query },
+        { maxPages: 2 },
+      ))
+        bounded.push(page);
+    })(),
+    (error) =>
+      error instanceof ProoflineError &&
+      error.type === "urn:proofline:sdk:pagination-limit",
+  );
+  assert.equal(bounded.length, 2);
+});
+
 test("export versions follow the dataset", async (t) => {
   const served = {
     findings: [
