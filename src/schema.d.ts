@@ -1976,11 +1976,27 @@ export interface components {
             environment_external_key: string;
             /**
              * @description Why the environment was not checked or does not apply. Null when it
-             *      was checked or its check is still running.
+             *      was checked, its check is still running, or
+             *      `reason_unrecorded` is true.
              */
             reason?: components["schemas"]["EnvironmentCheckReason"] | null;
+            /**
+             * @description True when the review checked nothing in the environment but predates
+             *      Proofline's record of the links its repository had when it was
+             *      created: its repository links the environment by a link made before
+             *      the review, and whether that link then asked for pull request reviews
+             *      is unknown. Absent otherwise.
+             */
+            reason_unrecorded?: boolean;
             /** @description Whether this review checked the environment. */
             state: components["schemas"]["EnvironmentCheckState"];
+            /**
+             * @description True when `reason` is `UNFINISHED` because the assessment's Kian pin
+             *      lacked required inventory evidence, so the environment was not
+             *      checked. Absent otherwise, including when the assessment recorded no
+             *      cause.
+             */
+            unfinished_inventory_incomplete?: boolean;
         };
         EnvironmentCheckReason: "NOT_COVERED" | "NO_CLOUD_ACCOUNT" | "READS_REFUSED" | "FORK_PULL_REQUEST" | "UNFINISHED" | "ENDED" | "PULL_REQUEST_REVIEWS_OFF";
         EnvironmentCheckState: "CHECKED" | "CHECKING" | "NOT_CHECKED" | "NOT_APPLICABLE";
