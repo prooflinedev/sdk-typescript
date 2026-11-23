@@ -5,6 +5,8 @@ const DEFAULT_BASE_URL = "https://proofline.sh";
 const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
 const MAX_RETRIES = 3;
 const MAX_RETRY_SECONDS = 60;
+// Longest timer Node honours: AbortSignal.timeout turns a longer one into 1 ms or a RangeError.
+const MAX_TIMER_MS = 2 ** 31 - 1;
 const inspect = Symbol.for("nodejs.util.inspect.custom");
 const secrets = new WeakMap<SecretToken, string>();
 
@@ -21,15 +23,11 @@ export class SecretToken {
   readonly #value: string;
 
   constructor(value: string) {
-    if (
-      !value ||
-      /\s/.test(value) ||
-      Array.from(value).some(
-        (char) => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127,
-      )
-    ) {
+    // Visible ASCII only: anything else is whitespace, a control character, or a
+    // character an HTTP header value cannot carry, such as a pasted zero-width space.
+    if (!/^[\x21-\x7e]+$/.test(value)) {
       throw new TypeError(
-        "a nonempty Proofline token without whitespace is required",
+        "a nonempty Proofline token of visible ASCII characters is required",
       );
     }
     this.#value = value;
@@ -170,9 +168,16 @@ function configuredOrigin(baseUrl: string | undefined): URL {
     : origin(fromEnvironment, "PROOFLINE_BASE_URL");
 }
 
-function positive(value: number, name: string): number {
+function positive(
+  value: number,
+  name: string,
+  maximum = Number.POSITIVE_INFINITY,
+): number {
   if (!Number.isFinite(value) || value <= 0) {
     throw new TypeError(`${name} must be a finite positive number`);
+  }
+  if (value > maximum) {
+    throw new TypeError(`${name} must be at most ${maximum}`);
   }
   return value;
 }
@@ -417,6 +422,7 @@ export class Transport {
     this.#timeout = positive(
       options.requestTimeoutMs ?? 30_000,
       "requestTimeoutMs",
+      MAX_TIMER_MS,
     );
   }
 

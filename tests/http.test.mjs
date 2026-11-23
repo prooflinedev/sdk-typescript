@@ -1701,6 +1701,94 @@ test("an unusable PROOFLINE_BASE_URL is refused by name without echoing its valu
   );
 });
 
+test("a token that cannot travel in an HTTP header is refused at construction without echoing it", (t) => {
+  const refused = [
+    ["a zero-width space", "plp_customer\u200Bcanary_3331"],
+    ["a non-ASCII letter", "plp_customer_caf\u00E9_3331"],
+    ["an emoji", "plp_customer_\u{1F511}_3331"],
+    ["a space", "plp_customer canary_3331"],
+    ["a control character", "plp_customer\u0007canary_3331"],
+    ["DEL", "plp_customer\u007Fcanary_3331"],
+    ["an empty value", ""],
+  ];
+  for (const [name, value] of refused) {
+    const rejects = (error) =>
+      error instanceof TypeError &&
+      error.message.startsWith("a nonempty Proofline token") &&
+      (value === "" || !error.message.includes(value)) &&
+      !error.message.includes("canary");
+    assert.throws(() => new SecretToken(value), rejects, name);
+    assert.throws(
+      () =>
+        new ProoflineClient({ baseUrl: "https://proofline.sh", token: value }),
+      rejects,
+      name,
+    );
+  }
+  const set = withEnvironment(t, "PROOFLINE_TOKEN", undefined);
+  set("plp_customer\u200Bcanary_3331");
+  assert.throws(
+    () => new ProoflineClient({ baseUrl: "https://proofline.sh" }),
+    (error) => error instanceof TypeError && !error.message.includes("canary"),
+  );
+  // Every visible ASCII character is accepted, and the token stays redacted.
+  const visible = Array.from({ length: 0x7e - 0x21 + 1 }, (_, i) =>
+    String.fromCharCode(0x21 + i),
+  ).join("");
+  for (const value of [token, visible]) {
+    const accepted = new SecretToken(value);
+    assert.equal(String(accepted), "SecretToken([redacted])");
+    assert.equal(JSON.stringify(accepted), '"[redacted]"');
+    assert(!inspect(accepted).includes(value));
+    const headers = new Headers();
+    accepted.apply(headers);
+    assert.equal(headers.get("authorization"), `Bearer ${value}`);
+  }
+  assert.doesNotThrow(
+    () => new ProoflineClient({ baseUrl: "https://proofline.sh", token }),
+  );
+});
+
+test("requestTimeoutMs is validated at construction, including the platform timer limit", async (t) => {
+  const maximum = 2 ** 31 - 1;
+  // Node turns a longer timer into 1 ms (above 2**31 - 1) or a RangeError (above 2**32 - 1).
+  for (const value of [
+    0,
+    -1,
+    Number.NaN,
+    Infinity,
+    maximum + 1,
+    2 ** 32,
+    1e10,
+  ]) {
+    assert.throws(
+      () =>
+        new ProoflineClient({
+          baseUrl: "https://proofline.sh",
+          token,
+          requestTimeoutMs: value,
+        }),
+      (error) =>
+        error instanceof TypeError &&
+        error.message.startsWith("requestTimeoutMs must be"),
+      String(value),
+    );
+  }
+  const fixture = await server(t, (_, response) =>
+    json(response, 200, { id: reviewId }),
+  );
+  for (const requestTimeoutMs of [0.5, 1_000, maximum]) {
+    const client = new ProoflineClient({
+      baseUrl: fixture.baseUrl,
+      token,
+      requestTimeoutMs,
+    });
+    if (requestTimeoutMs !== 0.5)
+      await client.getReview({ path: { org_id: orgId, review_id: reviewId } });
+  }
+  assert.equal(fixture.calls.length, 2);
+});
+
 test("exports preserve CSV cells, opaque cursors and tenant authorization failures", async (t) => {
   const { baseUrl, calls } = await server(t, (request, response) => {
     if (request.url.includes("cursor=refused"))
