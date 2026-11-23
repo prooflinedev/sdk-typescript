@@ -7,14 +7,12 @@ const MAX_RETRIES = 3;
 const MAX_RETRY_SECONDS = 60;
 const inspect = Symbol.for("nodejs.util.inspect.custom");
 const secrets = new WeakMap<SecretToken, string>();
-const RAW_JSON = Symbol("proofline.rawJson");
+const rawJsonBodies = new WeakMap<object, string>();
 
-export interface RawJsonBody {
-  readonly [RAW_JSON]: string;
-}
-
-export function rawJson(json: string): RawJsonBody {
-  return { [RAW_JSON]: json };
+export function rawJson(json: string): object {
+  const marker = {};
+  rawJsonBodies.set(marker, json);
+  return marker;
 }
 
 /** Why a review request created nothing; `reason` names the setting to change. */
@@ -441,7 +439,7 @@ export class Transport {
     template: string,
     parameters: Parameters,
     deadline?: number,
-    body?: object | RawJsonBody,
+    body?: object,
     decode: (text: string, headers: Headers) => unknown = (text) =>
       JSON.parse(text),
     accept = "application/json, application/problem+json",
@@ -462,9 +460,7 @@ export class Transport {
     const requestBody =
       body === undefined
         ? undefined
-        : typeof body === "object" && body !== null && RAW_JSON in body
-          ? body[RAW_JSON]
-          : JSON.stringify(body);
+        : (rawJsonBodies.get(body) ?? JSON.stringify(body));
     if (
       mcpPhase &&
       requestBody !== undefined &&
