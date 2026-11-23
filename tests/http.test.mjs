@@ -2479,8 +2479,8 @@ export async function use(client: ProoflineClient): Promise<void> {
     fixture,
   ]);
 });
+
 test("MCP calls isolate nested arguments across concurrent handshakes", async (t) => {
-  const observed = [];
   const pending = [];
   const { baseUrl } = await server(t, (_request, response, seen) => {
     const body = JSON.parse(seen.at(-1).body);
@@ -2499,11 +2499,13 @@ test("MCP calls isolate nested arguments across concurrent handshakes", async (t
       response.writeHead(202);
       return response.end();
     }
-    observed.push(body.params.arguments);
     json(response, 200, {
       jsonrpc: "2.0",
       id: 2,
-      result: { content: [{ type: "text", text: "ok" }] },
+      result: {
+        content: [{ type: "text", text: "ok" }],
+        structuredContent: { finding_ids: body.params.arguments.finding_ids },
+      },
     });
   });
 
@@ -2516,14 +2518,52 @@ test("MCP calls isolate nested arguments across concurrent handshakes", async (t
   const first = client.fixes.requestReverification(args);
   args.finding_ids.push(reviewId);
   const second = client.fixes.requestReverification(args);
-  await Promise.all([first, second]);
+  const [firstResult, secondResult] = await Promise.all([first, second]);
 
-  assert.deepEqual(
-    observed
-      .map((item) => item.finding_ids)
-      .sort((a, b) => a.length - b.length),
-    [[findingId], [findingId, reviewId]],
-  );
+  assert.deepEqual(firstResult.structuredContent.finding_ids, [findingId]);
+  assert.deepEqual(secondResult.structuredContent.finding_ids, [
+    findingId,
+    reviewId,
+  ]);
+});
+
+test("MCP calls preserve enumerable properties on objects with custom toJSON", async (t) => {
+  let sentArguments;
+  const { baseUrl } = await server(t, (_request, response, seen) => {
+    const body = JSON.parse(seen.at(-1).body);
+    if (body.method === "initialize") {
+      return json(response, 200, {
+        jsonrpc: "2.0",
+        id: 1,
+        result: { protocolVersion: "2025-11-25" },
+      });
+    }
+    if (body.method === "notifications/initialized") {
+      response.writeHead(202);
+      return response.end();
+    }
+    sentArguments = body.params.arguments;
+    json(response, 200, {
+      jsonrpc: "2.0",
+      id: 2,
+      result: { content: [{ type: "text", text: "ok" }] },
+    });
+  });
+
+  class CustomArgs {
+    constructor() {
+      this.repository = "owner/name";
+      this.page_key = "index";
+      this.organization_id = orgId;
+    }
+    toJSON() {
+      return { repository: this.repository, page_key: this.page_key };
+    }
+  }
+
+  const client = new ProoflineClient({ baseUrl, token });
+  await client.knowledge.getWikiPage(new CustomArgs());
+  assert.equal(sentArguments.organization_id, orgId);
 });
 
 test("oversized MCP requests fail locally before sending initialize", async (t) => {
@@ -2532,7 +2572,21 @@ test("oversized MCP requests fail locally before sending initialize", async (t) 
   );
   const client = new ProoflineClient({ baseUrl, token });
 
-  for (const question of ["x".repeat(8192), "é".repeat(4100)]) {
+  const envelopeBoundaryQuestion = "x".repeat(8115);
+  assert.ok(
+    new TextEncoder().encode(
+      JSON.stringify({
+        repository: "owner/name",
+        question: envelopeBoundaryQuestion,
+      }),
+    ).length <= 8192,
+  );
+
+  for (const question of [
+    envelopeBoundaryQuestion,
+    "x".repeat(8192),
+    "é".repeat(4100),
+  ]) {
     await assert.rejects(
       client.knowledge.askCodebase({ repository: "owner/name", question }),
       (error) =>
