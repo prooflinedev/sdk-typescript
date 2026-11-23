@@ -51,11 +51,11 @@ export class McpTools {
       method: "tools/call",
       params: { name, arguments: { ...args } },
     });
-    if (
-      toolCallJson !== undefined &&
-      new TextEncoder().encode(toolCallJson).length > MAX_MCP_REQUEST_BYTES
-    )
+    if (typeof toolCallJson !== "string")
+      throw new TypeError("MCP request could not be serialized to JSON");
+    if (new TextEncoder().encode(toolCallJson).length > MAX_MCP_REQUEST_BYTES)
       throw new TypeError("MCP request exceeds 8192 bytes");
+
     const invoke = (
       body: object,
       phase: "initialize" | "notification" | "call",
