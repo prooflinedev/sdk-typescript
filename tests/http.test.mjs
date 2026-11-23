@@ -2668,5 +2668,32 @@ test("MCP request size enforces the 8192-byte envelope limit pre-flight", async 
         error.message === "MCP request exceeds 8192 bytes",
     );
   }
+
+  const circularArgs = { repository: "owner/name", question: "circular" };
+  circularArgs.self = circularArgs;
+  await assert.rejects(
+    rejectClient.knowledge.askCodebase(circularArgs),
+    TypeError,
+  );
+
+  Object.defineProperty(Object.prototype, "toJSON", {
+    value: () => undefined,
+    configurable: true,
+    writable: true,
+  });
+  try {
+    await assert.rejects(
+      rejectClient.knowledge.askCodebase({
+        repository: "owner/name",
+        question: "undefined-envelope",
+      }),
+      (error) =>
+        error instanceof TypeError &&
+        error.message === "MCP request could not be serialized to JSON",
+    );
+  } finally {
+    Reflect.deleteProperty(Object.prototype, "toJSON");
+  }
+
   assert.equal(rejectFixture.calls.length, 0);
 });
