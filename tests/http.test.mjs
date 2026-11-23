@@ -2563,7 +2563,11 @@ test("MCP calls preserve enumerable properties on objects with custom toJSON", a
 
   const client = new ProoflineClient({ baseUrl, token });
   await client.knowledge.getWikiPage(new CustomArgs());
-  assert.equal(sentArguments.organization_id, orgId);
+  assert.deepEqual(sentArguments, {
+    repository: "owner/name",
+    page_key: "index",
+    organization_id: orgId,
+  });
 });
 
 test("MCP request size enforces the 8192-byte envelope limit pre-flight", async (t) => {
@@ -2589,6 +2593,7 @@ test("MCP request size enforces the 8192-byte envelope limit pre-flight", async 
   });
   assert.equal(encoder.encode(exact8192Envelope).length, 8192);
 
+  let acceptedCall;
   const okFixture = await server(t, (_request, response, seen) => {
     const body = JSON.parse(seen.at(-1).body);
     if (body.method === "initialize") {
@@ -2602,6 +2607,7 @@ test("MCP request size enforces the 8192-byte envelope limit pre-flight", async 
       response.writeHead(202);
       return response.end();
     }
+    acceptedCall = body;
     json(response, 200, {
       jsonrpc: "2.0",
       id: 2,
@@ -2617,6 +2623,10 @@ test("MCP request size enforces the 8192-byte envelope limit pre-flight", async 
     question: maxFittingQuestion,
   });
   assert.equal(accepted.content[0].text, "ok");
+  assert.deepEqual(acceptedCall.params.arguments, {
+    repository: "owner/name",
+    question: maxFittingQuestion,
+  });
   assert.equal(okFixture.calls.length, 3);
 
   const rejectFixture = await server(t, (_request, response) =>
@@ -2627,7 +2637,6 @@ test("MCP request size enforces the 8192-byte envelope limit pre-flight", async 
     token,
   });
 
-  // Fits within 8192 bytes as standalone args, but exceeds 8192 bytes in the MCP envelope.
   const envelopeOverflowQuestion = "x".repeat(8192 - baseEnvelopeLength + 1);
   assert.ok(
     encoder.encode(
