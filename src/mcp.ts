@@ -45,13 +45,16 @@ export class McpTools {
   protected async call(name: string, args: object): Promise<KnowledgeResult> {
     // Shallow-copy enumerable properties and serialize before protocol negotiation
     // yields to the caller, isolating nested arguments and avoiding wasted handshakes.
-    const toolCallJson = JSON.stringify({
+    const toolCallJson: string | undefined = JSON.stringify({
       jsonrpc: "2.0",
       id: 2,
       method: "tools/call",
       params: { name, arguments: { ...args } },
     });
-    if (new TextEncoder().encode(toolCallJson).length > MAX_MCP_REQUEST_BYTES)
+    if (
+      toolCallJson !== undefined &&
+      new TextEncoder().encode(toolCallJson).length > MAX_MCP_REQUEST_BYTES
+    )
       throw new TypeError("MCP request exceeds 8192 bytes");
     const invoke = (
       body: object,

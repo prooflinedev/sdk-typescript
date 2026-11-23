@@ -2601,9 +2601,10 @@ test("MCP request size enforces the 8192-byte envelope limit pre-flight", async 
   });
   assert.equal(encoder.encode(exact8192Envelope).length, 8192);
 
-  let acceptedCall;
+  let acceptedRawBody;
   const okFixture = await server(t, (_request, response, seen) => {
-    const body = JSON.parse(seen.at(-1).body);
+    const rawBody = seen.at(-1).body;
+    const body = JSON.parse(rawBody);
     if (body.method === "initialize") {
       return json(response, 200, {
         jsonrpc: "2.0",
@@ -2615,7 +2616,7 @@ test("MCP request size enforces the 8192-byte envelope limit pre-flight", async 
       response.writeHead(202);
       return response.end();
     }
-    acceptedCall = body;
+    acceptedRawBody = rawBody;
     json(response, 200, {
       jsonrpc: "2.0",
       id: 2,
@@ -2631,10 +2632,7 @@ test("MCP request size enforces the 8192-byte envelope limit pre-flight", async 
     question: maxFittingQuestion,
   });
   assert.equal(accepted.content[0].text, "ok");
-  assert.deepEqual(acceptedCall.params.arguments, {
-    repository: "owner/name",
-    question: maxFittingQuestion,
-  });
+  assert.equal(acceptedRawBody, exact8192Envelope);
   assert.equal(okFixture.calls.length, 3);
 
   const rejectFixture = await server(t, (_request, response) =>
