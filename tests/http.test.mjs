@@ -2510,15 +2510,14 @@ test("MCP calls isolate nested arguments across concurrent handshakes", async (t
   });
 
   const client = new ProoflineClient({ baseUrl, token });
-  const initialFindingIds = [findingId];
   const args = {
     review_id: reviewId,
-    finding_ids: initialFindingIds,
+    finding_ids: [findingId],
     commit_sha: "a".repeat(40),
     note: "reverify fix",
   };
   const first = client.fixes.requestReverification(args);
-  args.finding_ids = [...initialFindingIds, reviewId];
+  args.finding_ids.push(reviewId);
   const second = client.fixes.requestReverification(args);
   const [firstResult, secondResult] = await Promise.all([first, second]);
 
