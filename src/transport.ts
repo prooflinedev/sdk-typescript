@@ -63,8 +63,9 @@ export class ProoflineError extends Error {
     type: string,
     detail: string,
     fields: ProblemFields = {},
+    options?: ErrorOptions,
   ) {
-    super(`Proofline request failed with status ${status}`);
+    super(`Proofline request failed with status ${status}`, options);
     this.name = "ProoflineError";
     this.#problemType = type;
     this.#detail = detail;
@@ -490,17 +491,29 @@ export class Transport {
           credentials: "omit",
           signal,
         });
-      } catch {
+      } catch (error) {
         if (signal.aborted && waitTimeout)
           throw new ProoflineError(
             0,
             "urn:proofline:sdk:timeout",
             "the review wait deadline expired",
+            {},
+            { cause: error },
+          );
+        if (signal.aborted)
+          throw new ProoflineError(
+            0,
+            "urn:proofline:sdk:transport",
+            "the request did not receive a response within its timeout",
+            {},
+            { cause: error },
           );
         throw new ProoflineError(
           0,
           "urn:proofline:sdk:transport",
-          "the request did not receive a response within its timeout",
+          "the request failed before receiving a response",
+          {},
+          { cause: error },
         );
       }
       if (mcpPhase && response.ok) {
