@@ -2504,27 +2504,36 @@ test("MCP calls isolate nested arguments across concurrent handshakes", async (t
       id: 2,
       result: {
         content: [{ type: "text", text: "ok" }],
-        structuredContent: { finding_ids: body.params.arguments.finding_ids },
+        structuredContent: { arguments: body.params.arguments },
       },
     });
   });
 
   const client = new ProoflineClient({ baseUrl, token });
+  const initialFindingIds = [findingId];
   const args = {
     review_id: reviewId,
-    finding_ids: [findingId],
+    finding_ids: initialFindingIds,
     commit_sha: "a".repeat(40),
+    note: "reverify fix",
   };
   const first = client.fixes.requestReverification(args);
-  args.finding_ids.push(reviewId);
+  args.finding_ids = [...initialFindingIds, reviewId];
   const second = client.fixes.requestReverification(args);
   const [firstResult, secondResult] = await Promise.all([first, second]);
 
-  assert.deepEqual(firstResult.structuredContent.finding_ids, [findingId]);
-  assert.deepEqual(secondResult.structuredContent.finding_ids, [
-    findingId,
-    reviewId,
-  ]);
+  assert.deepEqual(firstResult.structuredContent.arguments, {
+    review_id: reviewId,
+    finding_ids: [findingId],
+    commit_sha: "a".repeat(40),
+    note: "reverify fix",
+  });
+  assert.deepEqual(secondResult.structuredContent.arguments, {
+    review_id: reviewId,
+    finding_ids: [findingId, reviewId],
+    commit_sha: "a".repeat(40),
+    note: "reverify fix",
+  });
 });
 
 test("MCP calls preserve enumerable properties on objects with custom toJSON", async (t) => {
