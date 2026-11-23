@@ -432,7 +432,7 @@ export class Transport {
     template: string,
     parameters: Parameters,
     deadline?: number,
-    body?: object,
+    body?: object | string,
     decode: (text: string, headers: Headers) => unknown = (text) =>
       JSON.parse(text),
     accept = "application/json, application/problem+json",
@@ -450,8 +450,17 @@ export class Transport {
       if (value !== null && value !== undefined)
         url.searchParams.set(key, String(value));
     }
-    const requestBody = body === undefined ? undefined : JSON.stringify(body);
-    if (mcpPhase && new TextEncoder().encode(requestBody).length > 8192)
+    const requestBody =
+      body === undefined
+        ? undefined
+        : typeof body === "string"
+          ? body
+          : JSON.stringify(body);
+    if (
+      mcpPhase &&
+      requestBody !== undefined &&
+      new TextEncoder().encode(requestBody).length > 8192
+    )
       throw new TypeError("MCP request exceeds 8192 bytes");
     for (let attempt = 0; ; attempt += 1) {
       const headers = new Headers({

@@ -2479,3 +2479,66 @@ export async function use(client: ProoflineClient): Promise<void> {
     fixture,
   ]);
 });
+test("MCP calls isolate nested arguments across concurrent handshakes", async (t) => {
+  const observed = [];
+  const pending = [];
+  const { baseUrl } = await server(t, (_request, response, seen) => {
+    const body = JSON.parse(seen.at(-1).body);
+    if (body.method === "initialize") {
+      const reply = () =>
+        json(response, 200, {
+          jsonrpc: "2.0",
+          id: 1,
+          result: { protocolVersion: "2025-11-25" },
+        });
+      pending.push(reply);
+      if (pending.length === 2) for (const send of pending.splice(0)) send();
+      return;
+    }
+    if (body.method === "notifications/initialized") {
+      response.writeHead(202);
+      return response.end();
+    }
+    observed.push(body.params.arguments);
+    json(response, 200, {
+      jsonrpc: "2.0",
+      id: 2,
+      result: { content: [{ type: "text", text: "ok" }] },
+    });
+  });
+
+  const client = new ProoflineClient({ baseUrl, token });
+  const args = {
+    review_id: reviewId,
+    finding_ids: [findingId],
+    commit_sha: "a".repeat(40),
+  };
+  const first = client.fixes.requestReverification(args);
+  args.finding_ids.push(reviewId);
+  const second = client.fixes.requestReverification(args);
+  await Promise.all([first, second]);
+
+  assert.deepEqual(
+    observed
+      .map((item) => item.finding_ids)
+      .sort((a, b) => a.length - b.length),
+    [[findingId], [findingId, reviewId]],
+  );
+});
+
+test("oversized MCP requests fail locally before sending initialize", async (t) => {
+  const { baseUrl, calls } = await server(t, (_request, response) =>
+    json(response, 500, {}),
+  );
+  const client = new ProoflineClient({ baseUrl, token });
+
+  for (const question of ["x".repeat(8192), "é".repeat(4100)]) {
+    await assert.rejects(
+      client.knowledge.askCodebase({ repository: "owner/name", question }),
+      (error) =>
+        error instanceof TypeError &&
+        error.message === "MCP request exceeds 8192 bytes",
+    );
+  }
+  assert.equal(calls.length, 0);
+});
