@@ -853,6 +853,15 @@ export interface components {
             environment_id: string;
             /** @description What the checks that leave the deploy unproven name. */
             gaps: components["schemas"]["DeployVerificationGap"][];
+            /**
+             * @description The ID of each GitHub deployment the deploy holds, ascending: the
+             *      deployment a pipeline created, or each one an Actions run's jobs
+             *      created. A deployment outside Actions is a deploy of its own, so two
+             *      of one commit, GitHub Environment and task read apart by this ID.
+             *      Every listed deploy holds one; a server from before the field existed
+             *      omits it.
+             */
+            github_deployment_ids?: number[];
             /** @description The GitHub Environment the deployment named. */
             github_environment?: string | null;
             /** @description Whether any check recorded `REGRESSED`, whatever its gaps. */
@@ -967,12 +976,13 @@ export interface components {
         };
         /**
          * @description What a review is counted under: the cause its assessments recorded,
-         *      `SPEND_LIMIT_REACHED` where an assessment recorded a spend limit's code, or
-         *      `OUT_OF_CREDITS` where an assessment recorded the credit refusal. An
-         *      assessment's detail names that refusal by the rule `public_reason_codes`
-         *      applies; no other detail is read into the summary.
+         *      `SPEND_LIMIT_REACHED` where an assessment recorded a spend limit's code,
+         *      `OUT_OF_CREDITS` where an assessment recorded the credit refusal, or
+         *      `GITHUB_REFUSED` where a code assessment ended on GitHub's refusal of a
+         *      source read. An assessment's detail names the credit refusal by the rule
+         *      `public_reason_codes` applies; no other detail is read into the summary.
          */
-        CountedCause: components["schemas"]["IncompleteCause"] | components["schemas"]["CreditRefusalCause"];
+        CountedCause: components["schemas"]["IncompleteCause"] | components["schemas"]["CreditRefusalCause"] | components["schemas"]["InstallationRefusalCause"];
         /**
          * @description An upload refused for its content: a symbolic or unknown commit, or a
          *      report that cannot be read. Nothing is stored.
@@ -1572,7 +1582,9 @@ export interface components {
              * @description `incomplete_causes` as the Inbox and the reviews `cause:` search
              *      count them: `OUT_OF_CREDITS` or `SPEND_LIMIT_REACHED` in place of the
              *      `NOT_CONFIGURED` an assessment records when credits or a monthly spend
-             *      limit refused it. Present exactly when
+             *      limit refused it, and `GITHUB_REFUSED` in place of the
+             *      `EVIDENCE_UNAVAILABLE` a code assessment records when GitHub refused
+             *      its source read. Present exactly when
              *      `incomplete_causes` is.
              */
             counted_incomplete_causes?: components["schemas"]["CountedCause"][];
@@ -2508,6 +2520,11 @@ export interface components {
          *      recorded it (`incompleteness_kind`), or `UNKNOWN` when none did.
          */
         IncompleteCause: ("NOT_CONFIGURED" | "POLICY_EXCLUDED" | "EVIDENCE_UNAVAILABLE" | "HYPOTHESES_UNRESOLVED" | "MODEL_BUDGET_EXHAUSTED") | "UNKNOWN";
+        /**
+         * @description A GitHub refusal the App installation repairs, named apart from the
+         *      `EVIDENCE_UNAVAILABLE` it records.
+         */
+        InstallationRefusalCause: "GITHUB_REFUSED";
         /** @description What published a supported Kian finding. */
         KianFindingSource: "CONFIRMED_REQUIREMENT" | "INVESTIGATION" | "SHARED_IDENTITY";
         /**
@@ -3369,7 +3386,9 @@ export interface components {
              * @description `incomplete_causes` as the Inbox and the reviews `cause:` search
              *      count them: `OUT_OF_CREDITS` or `SPEND_LIMIT_REACHED` in place of the
              *      `NOT_CONFIGURED` an assessment records when credits or a monthly spend
-             *      limit refused it. Present exactly when
+             *      limit refused it, and `GITHUB_REFUSED` in place of the
+             *      `EVIDENCE_UNAVAILABLE` a code assessment records when GitHub refused
+             *      its source read. Present exactly when
              *      `incomplete_causes` is.
              */
             counted_incomplete_causes?: components["schemas"]["CountedCause"][];
