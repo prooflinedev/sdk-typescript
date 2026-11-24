@@ -2598,6 +2598,13 @@ export interface components {
              */
             review_id: string;
         };
+        /** @description Why a review started now would run without its model. */
+        ModelWarning: {
+            /** @description Proofline's sentence naming the fix. */
+            cause: string;
+            /** @description `MODEL_<cause>`, the same code a finished review's read carries. */
+            reason_code: string;
+        };
         NotAssessedView: {
             /**
              * @description The display name of the environment whose assessment is not
@@ -3715,6 +3722,11 @@ export interface components {
              *      returned. Clicking twice does not run twice.
              */
             existing: boolean;
+            /**
+             * @description Why this review runs without its model and checks fixed rules only,
+             *      for a caller that started it without reading the offer's warning.
+             */
+            model_warning?: components["schemas"]["ModelWarning"] | null;
             /**
              * Format: uuid
              * @description The review that owns the live head, new or existing.
