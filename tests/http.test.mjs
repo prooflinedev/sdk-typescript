@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { once } from "node:events";
+import { getEventListeners, once } from "node:events";
 import {
   cp,
   mkdtemp,
@@ -14,6 +14,7 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { inspect } from "node:util";
 import { ProoflineClient, ProoflineError, SecretToken } from "../dist/index.js";
@@ -1505,6 +1506,114 @@ test("the wait timeout includes an in-flight request and returns the retained re
   } finally {
     clock.mock.restore();
   }
+});
+
+test("an aborted wait rejects with the signal's reason and stops polling", async (t) => {
+  let mode = "running";
+  const fixture = await server(t, (_, response) => {
+    if (mode === "running") return json(response, 200, review("RUNNING"));
+    if (mode === "unavailable")
+      return json(
+        response,
+        503,
+        { detail: responseCanary },
+        { "Retry-After": "5" },
+      );
+    if (mode === "partial") {
+      response.writeHead(200, { "Content-Type": "application/json" });
+      response.write('{"id":');
+    }
+    // "no-headers" never answers until the fixture closes.
+  });
+  const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
+  const reason = new Error("the caller stopped waiting");
+  const cancelled = (error) => error === reason;
+
+  // An already-aborted signal sends nothing.
+  await assert.rejects(
+    client.waitForReview(orgId, reviewId, {
+      signal: AbortSignal.abort(reason),
+    }),
+    cancelled,
+  );
+  assert.equal(fixture.calls.length, 0);
+
+  // Aborting during the five-second poll interval ends the wait at once, and
+  // no request follows.
+  let controller = new AbortController();
+  let started = performance.now();
+  let waiting = client.waitForReview(orgId, reviewId, {
+    signal: controller.signal,
+  });
+  while (fixture.calls.length === 0) await sleep(5);
+  await sleep(20);
+  controller.abort(reason);
+  await assert.rejects(waiting, cancelled);
+  assert(performance.now() - started < 1_000);
+  await sleep(100);
+  assert.equal(fixture.calls.length, 1);
+
+  // The default reason is the platform's AbortError, as fetch reports it.
+  controller = new AbortController();
+  waiting = client.waitForReview(orgId, reviewId, {
+    signal: controller.signal,
+  });
+  while (fixture.calls.length === 1) await sleep(5);
+  controller.abort();
+  await assert.rejects(
+    waiting,
+    (error) => error instanceof DOMException && error.name === "AbortError",
+  );
+
+  // Cancellation interrupts an unanswered request, a partial body and a
+  // Retry-After delay without becoming a timeout or transport fault.
+  for (const nextMode of ["no-headers", "partial", "unavailable"]) {
+    mode = nextMode;
+    const before = fixture.calls.length;
+    controller = new AbortController();
+    started = performance.now();
+    waiting = client.waitForReview(orgId, reviewId, {
+      timeoutMs: 60_000,
+      signal: controller.signal,
+    });
+    while (fixture.calls.length === before) await sleep(5);
+    await sleep(30);
+    controller.abort(reason);
+    await assert.rejects(waiting, cancelled, nextMode);
+    assert(performance.now() - started < 1_000, nextMode);
+    await sleep(50);
+    assert.equal(fixture.calls.length - before, 1, nextMode);
+  }
+
+  await assert.rejects(
+    client.waitForReview(orgId, reviewId, { signal: { aborted: false } }),
+    (error) =>
+      error instanceof TypeError &&
+      error.message === "signal must be an AbortSignal",
+  );
+});
+
+test("a wait with an unaborted signal keeps its outcomes and leaves no listeners", async (t) => {
+  let status = "RUNNING";
+  const fixture = await server(t, (_, response) =>
+    json(response, 200, review(status)),
+  );
+  const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
+  const controller = new AbortController();
+  const timedOut = await client.waitForReview(orgId, reviewId, {
+    timeoutMs: 80,
+    signal: controller.signal,
+  });
+  assert.equal(timedOut.status, "TIMED_OUT");
+  assert.equal(timedOut.review.status, "RUNNING");
+  status = "COMPLETED";
+  const completed = await client.waitForReview(orgId, reviewId, {
+    signal: controller.signal,
+  });
+  assert.equal(completed.status, "COMPLETED");
+  assert.deepEqual(completed.gaps, []);
+  // A long-lived signal shared across waits must not accumulate listeners.
+  assert.equal(getEventListeners(controller.signal, "abort").length, 0);
 });
 
 test("pagination keeps filters and refuses cycles, incomplete metadata and resource bounds", async (t) => {

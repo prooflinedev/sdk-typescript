@@ -75,6 +75,11 @@ export interface ReviewOutcome {
 
 export interface WaitOptions {
   timeoutMs?: number;
+  /**
+   * Stops waiting when aborted: the in-flight request, a retry delay or the poll interval
+   * ends at once, and the wait rejects with `signal.reason`. Aborting never stops the review.
+   */
+  signal?: AbortSignal;
 }
 
 export class ProoflineClient extends Operations {
@@ -219,6 +224,10 @@ export class ProoflineClient extends Operations {
     const timeout = options.timeoutMs ?? 20 * 60_000;
     if (!Number.isFinite(timeout) || timeout < 0)
       throw new TypeError("timeoutMs must be finite and nonnegative");
+    const signal = options.signal;
+    if (signal !== undefined && !(signal instanceof AbortSignal))
+      throw new TypeError("signal must be an AbortSignal");
+    signal?.throwIfAborted();
     const deadline = performance.now() + timeout;
     const url = this.#transport.reviewUrl(orgId, reviewId);
     let review: Review | null = null;
@@ -237,8 +246,15 @@ export class ProoflineClient extends Operations {
           "/api/v1/organizations/{org_id}/reviews/{review_id}",
           { path: { org_id: orgId, review_id: reviewId } },
           deadline,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          signal,
         );
       } catch (error) {
+        // Cancellation wins over a timeout or transport fault that raced it.
+        signal?.throwIfAborted();
         if (
           error instanceof ProoflineError &&
           error.type === "urn:proofline:sdk:timeout"
@@ -279,6 +295,7 @@ export class ProoflineClient extends Operations {
         );
       await sleep(
         Math.min(interval, Math.max(0, deadline - performance.now())),
+        signal,
       );
       interval = Math.min(interval * 2, 60_000);
     }
