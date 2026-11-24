@@ -2479,3 +2479,23 @@ export async function use(client: ProoflineClient): Promise<void> {
     fixture,
   ]);
 });
+
+test("waitForReview can poll sooner for short-lived reviews", async (t) => {
+  const fixture = await server(t, (_request, response, calls) =>
+    json(response, 200, review(calls.length === 1 ? "RUNNING" : "COMPLETED")),
+  );
+  const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
+  for (const invalid of [0, 99, 100.5, 60_001, Number.POSITIVE_INFINITY]) {
+    await assert.rejects(
+      client.waitForReview(orgId, reviewId, { initialPollIntervalMs: invalid }),
+      /initialPollIntervalMs/,
+    );
+  }
+  assert.equal(fixture.calls.length, 0);
+  const result = await client.waitForReview(orgId, reviewId, {
+    initialPollIntervalMs: 100,
+    timeoutMs: 2_000,
+  });
+  assert.equal(result.status, "COMPLETED");
+  assert.equal(fixture.calls.length, 2);
+});
