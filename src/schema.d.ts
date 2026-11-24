@@ -884,6 +884,15 @@ export interface components {
             /** @description Where the deploy's verification stands. */
             state: components["schemas"]["DeployCoverageState"];
             /**
+             * @description Whether the deploy's verification ended. A check with no `result`
+             *      then will never be recorded, while a running verification can still
+             *      record one that is overdue; `state` reads `UNRECORDED` for both.
+             *      False without a verification, which `state` reads as `UNVERIFIED`.
+             *      Older responses omit it, which reads as false.
+             * @default false
+             */
+            verification_ended?: boolean;
+            /**
              * Format: int64
              * @description The attempt of that run that created the deployment addressing the
              *      deploy; above 1 for a rerun.

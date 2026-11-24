@@ -1,6 +1,6 @@
 import type { components } from "./schema.js";
 
-const VERSION = "10.0.0";
+const VERSION = "10.1.0";
 const DEFAULT_BASE_URL = "https://proofline.sh";
 const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
 const MAX_RETRIES = 3;
