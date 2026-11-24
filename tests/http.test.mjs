@@ -1839,6 +1839,42 @@ test("iterExportPages refuses cursor loops and exhausted page bounds", async (t)
   assert.equal(cycleRequests, 2);
   assert.equal(new URL(cycleCalls[0].url, cycleBaseUrl).searchParams.get("cursor"), "initial");
 
+  let echoedCursorRequests = 0;
+  const { baseUrl: echoedCursorBaseUrl, calls: echoedCursorCalls } = await server(
+    t,
+    (_request, response) => {
+      echoedCursorRequests += 1;
+      response.writeHead(200, {
+        "content-type": "application/x-ndjson",
+        "x-proofline-export-version": "1",
+        "x-proofline-export-settled-until": "2026-10-25T00:00:00Z",
+        "x-proofline-export-next-cursor": "initial",
+      });
+      response.end('{"dataset_version":1}\n');
+    },
+  );
+  const echoedCursorClient = new ProoflineClient({ baseUrl: echoedCursorBaseUrl, token });
+  await assert.rejects(
+    Array.fromAsync(
+      echoedCursorClient.iterExportPages({
+        path: { org_id: orgId, dataset: "reviews" },
+        query: {
+          from: "2026-10-01T00:00:00Z",
+          to: "2026-10-25T00:00:00Z",
+          cursor: "initial",
+        },
+      }),
+    ),
+    (error) =>
+      error instanceof ProoflineError &&
+      error.type === "urn:proofline:sdk:invalid-response",
+  );
+  assert.equal(echoedCursorRequests, 1);
+  assert.equal(
+    new URL(echoedCursorCalls[0].url, echoedCursorBaseUrl).searchParams.get("cursor"),
+    "initial",
+  );
+
   let boundedPage = 0;
   const { baseUrl: boundedBaseUrl } = await server(t, (_request, response) => {
     boundedPage += 1;
