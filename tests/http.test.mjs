@@ -1771,8 +1771,11 @@ test("iterExportPages follows opaque cursors lazily and preserves filters", asyn
     },
   };
   const iterator = client.iterExportPages(parameters);
-  assert.deepEqual((await iterator.next()).value.rows[0].cursor, "first");
+  assert.equal(calls.length, 0);
+  const first = await iterator.next();
+  assert.deepEqual(first.value.rows[0].cursor, "first");
   assert.equal(calls.length, 1);
+  first.value.nextCursor = null;
   assert.deepEqual((await iterator.next()).value.rows[0].cursor, "opaque/+cursor");
   assert.equal(calls.length, 2);
   const last = await iterator.next();
@@ -1787,6 +1790,11 @@ test("iterExportPages follows opaque cursors lazily and preserves filters", asyn
     assert.equal(url.searchParams.get("format"), "ndjson");
   }
   assert.equal(new URL(calls[1].url, baseUrl).searchParams.get("cursor"), "opaque/+cursor");
+  for (const call of calls)
+    assert.equal(
+      new URL(call.url, baseUrl).pathname,
+      `/api/v1/organizations/${orgId}/exports/reviews`,
+    );
 });
 
 test("iterExportPages refuses cursor loops and exhausted page bounds", async (t) => {
@@ -1838,6 +1846,31 @@ test("iterExportPages refuses cursor loops and exhausted page bounds", async (t)
       error instanceof ProoflineError &&
       error.type === "urn:proofline:sdk:pagination-limit",
   );
+  assert.equal(boundedPage, 2);
+
+  let exactPage = 0;
+  const { baseUrl: exactBaseUrl } = await server(t, (_request, response) => {
+    exactPage += 1;
+    const nextCursor = exactPage === 1 ? "exact-second" : null;
+    response.writeHead(200, {
+      "content-type": "application/x-ndjson",
+      "x-proofline-export-version": "1",
+      "x-proofline-export-settled-until": "2026-10-25T00:00:00Z",
+      ...(nextCursor === null ? {} : { "x-proofline-export-next-cursor": nextCursor }),
+    });
+    response.end('{"dataset_version":1}\n');
+  });
+  const exactPages = await Array.fromAsync(
+    new ProoflineClient({ baseUrl: exactBaseUrl, token }).iterExportPages(
+      {
+        path: { org_id: orgId, dataset: "reviews" },
+        query: { from: "2026-10-01T00:00:00Z", to: "2026-10-25T00:00:00Z" },
+      },
+      { maxPages: 2 },
+    ),
+  );
+  assert.equal(exactPages.length, 2);
+  assert.equal(exactPage, 2);
 });
 
 test("export versions follow the dataset", async (t) => {
