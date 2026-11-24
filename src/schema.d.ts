@@ -1286,9 +1286,9 @@ export interface components {
             kind: string;
             /**
              * @description The reference's display label, such as a path with its line range. A
-             *      recorded read, a vendor documentation read or an unnamed World entity
-             *      carries a fixed label, and a deterministic test carries its check's
-             *      readable name.
+             *      recorded read, a vendor documentation read, a customer tool call, a
+             *      static analysis result or an unnamed World entity carries a fixed
+             *      label, and a deterministic test carries its check's readable name.
              */
             label: string;
             /**
