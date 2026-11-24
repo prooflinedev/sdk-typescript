@@ -38,6 +38,44 @@ try {
 }
 ```
 
+## Deploy verification
+
+After a deploy lands, Proofline records up to four checks of it: at landing, 20 minutes, one hour and one day. `getCommitDeployVerifications` returns those checks for each deploy of a commit, and `judgeDeployVerifications` turns that response into one answer, by the rules of `proofline ci deploy`.
+
+```typescript
+import { judgeDeployVerifications } from "@proofline/sdk";
+
+const giveUpAt = Date.now() + 30 * 60_000;
+for (;;) {
+  const verdict = judgeDeployVerifications(
+    await client.getCommitDeployVerifications({
+      path: { org_id: organizationId, repo_id: repositoryId, commit_sha: deployedCommitSha },
+    }),
+    {
+      until: "MINUTES_20",
+      select: (deploy) => deploy.github_environment === "production",
+    },
+  );
+  if (verdict.status === "NO_REGRESSION") break;
+  if (verdict.status !== "WAITING" || Date.now() > giveUpAt) {
+    for (const { deploy, reading } of verdict.deploys)
+      console.error(reading, deploy.deploy_url, deploy.gaps);
+    throw new Error(`deploy checks: ${verdict.status}`);
+  }
+  await new Promise((resolve) => setTimeout(resolve, 30_000));
+}
+```
+
+`until` names the check to read through: `LANDING` (the default), `MINUTES_20`, `HOUR_1` or `DAY_1`. The checks before it count too. `select` chooses which deploys to read; without it every deploy of the commit counts.
+
+The status is one of four. `NO_REGRESSION` means every selected deploy recorded `HEALTHY` with no gap for each check through `until`. `REGRESSED` means a selected deploy failed or any of its checks recorded `REGRESSED`, whatever the others say. `NOT_ESTABLISHED` means a selected deploy was superseded, has no verification, names a gap, or recorded a result or state this SDK does not know. `WAITING` means no deploy is selected yet, or one has not recorded the `until` check. `proofline ci deploy` exits 0, 3 and 2 for the first three, and keeps waiting on the fourth until its timeout, then exits 2.
+
+The function reads one response. It sends nothing and waits for nothing, so the loop, the interval and the time to give up are yours, as above. `WAITING` at your deadline is not a result.
+
+`NO_REGRESSION` says only that the recorded checks observed no regression. A commit with no recorded deploy, a selection that matches none, a gap and an unknown result or state are never `NO_REGRESSION`. A response that contradicts the contract, such as deploys beside `recorded: false` or a checkpoint listed twice, throws `ProoflineError` with type `urn:proofline:sdk:invalid-response`. `verdict.deploys` keeps each selected deploy as the server returned it, beside its own reading.
+
+Proofline records the landing of a run's deploy only after the run completes, so a GitHub Actions job that waits for a deploy its own run created stays `WAITING`. Read the checks from a [separate workflow](https://proofline.sh/docs/ci/#read-the-checks-from-a-separate-workflow).
+
 ## Coverage uploads
 
 Upload CI coverage reports with a repository-restricted token that holds `coverage:write`. The token holder must have current GitHub write access to that repository. Set `PROOFLINE_TOKEN` to that token and pass the full commit SHA that the tests ran on. The server refuses branch names and abbreviated SHAs.
