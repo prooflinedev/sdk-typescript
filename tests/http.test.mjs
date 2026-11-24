@@ -1809,9 +1809,9 @@ test("iterExportPages follows opaque cursors lazily and preserves filters", asyn
 });
 
 test("iterExportPages refuses cursor loops and exhausted page bounds", async (t) => {
-  let cycleCalls = 0;
-  const { baseUrl: cycleBaseUrl } = await server(t, (_request, response) => {
-    cycleCalls += 1;
+  let cycleRequests = 0;
+  const { baseUrl: cycleBaseUrl, calls: cycleCalls } = await server(t, (_request, response) => {
+    cycleRequests += 1;
     response.writeHead(200, {
       "content-type": "application/x-ndjson",
       "x-proofline-export-version": "1",
@@ -1825,14 +1825,19 @@ test("iterExportPages refuses cursor loops and exhausted page bounds", async (t)
     Array.fromAsync(
       client.iterExportPages({
         path: { org_id: orgId, dataset: "reviews" },
-        query: { from: "2026-10-01T00:00:00Z", to: "2026-10-25T00:00:00Z" },
+        query: {
+          from: "2026-10-01T00:00:00Z",
+          to: "2026-10-25T00:00:00Z",
+          cursor: "initial",
+        },
       }),
     ),
     (error) =>
       error instanceof ProoflineError &&
       error.type === "urn:proofline:sdk:invalid-response",
   );
-  assert.equal(cycleCalls, 2);
+  assert.equal(cycleRequests, 2);
+  assert.equal(new URL(cycleCalls[0].url, cycleBaseUrl).searchParams.get("cursor"), "initial");
 
   let boundedPage = 0;
   const { baseUrl: boundedBaseUrl } = await server(t, (_request, response) => {
@@ -1846,16 +1851,19 @@ test("iterExportPages refuses cursor loops and exhausted page bounds", async (t)
     response.end('{"dataset_version":1}\n');
   });
   const boundedClient = new ProoflineClient({ baseUrl: boundedBaseUrl, token });
+  const boundedIterator = boundedClient.iterExportPages(
+    {
+      path: { org_id: orgId, dataset: "reviews" },
+      query: { from: "2026-10-01T00:00:00Z", to: "2026-10-25T00:00:00Z" },
+    },
+    { maxPages: 2 },
+  );
+  const boundedFirst = await boundedIterator.next();
+  const boundedSecond = await boundedIterator.next();
+  assert.equal(boundedFirst.done, false);
+  assert.equal(boundedSecond.done, false);
   await assert.rejects(
-    Array.fromAsync(
-      boundedClient.iterExportPages(
-        {
-          path: { org_id: orgId, dataset: "reviews" },
-          query: { from: "2026-10-01T00:00:00Z", to: "2026-10-25T00:00:00Z" },
-        },
-        { maxPages: 2 },
-      ),
-    ),
+    boundedIterator.next(),
     (error) =>
       error instanceof ProoflineError &&
       error.type === "urn:proofline:sdk:pagination-limit",
