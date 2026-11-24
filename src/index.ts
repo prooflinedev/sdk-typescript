@@ -125,12 +125,13 @@ export class ProoflineClient extends Operations {
         ...(cursor === undefined ? {} : { cursor }),
       };
       const page = await this.exportReviews({ ...parameters, query });
+      const nextCursor = page.nextCursor;
       yield page;
-      if (page.nextCursor === null) return;
-      if (!page.nextCursor || seen.has(page.nextCursor))
+      if (nextCursor === null) return;
+      if (!nextCursor || seen.has(nextCursor))
         throw protocol("the export collection has no advancing cursor");
-      seen.add(page.nextCursor);
-      cursor = page.nextCursor;
+      seen.add(nextCursor);
+      cursor = nextCursor;
     }
     throw paginationLimit("Export");
   }
