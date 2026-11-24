@@ -75,6 +75,8 @@ export interface ReviewOutcome {
 
 export interface WaitOptions {
   timeoutMs?: number;
+  /** Initial delay between polls, in milliseconds. Defaults to 5,000. */
+  initialPollIntervalMs?: number;
 }
 
 export class ProoflineClient extends Operations {
@@ -219,10 +221,19 @@ export class ProoflineClient extends Operations {
     const timeout = options.timeoutMs ?? 20 * 60_000;
     if (!Number.isFinite(timeout) || timeout < 0)
       throw new TypeError("timeoutMs must be finite and nonnegative");
+    const initialInterval = options.initialPollIntervalMs ?? 5_000;
+    if (
+      !Number.isSafeInteger(initialInterval) ||
+      initialInterval < 100 ||
+      initialInterval > 60_000
+    )
+      throw new TypeError(
+        "initialPollIntervalMs must be an integer from 100 to 60000",
+      );
     const deadline = performance.now() + timeout;
     const url = this.#transport.reviewUrl(orgId, reviewId);
     let review: Review | null = null;
-    let interval = 5_000;
+    let interval = initialInterval;
     for (;;) {
       if (performance.now() >= deadline)
         return outcome(
