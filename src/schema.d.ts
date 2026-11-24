@@ -1604,7 +1604,8 @@ export interface components {
             environments?: components["schemas"]["EnvironmentCheck"][];
             /**
              * Format: int64
-             * @description How many findings this review's assessments recorded, across all of them.
+             * @description How many findings this review's assessments recorded, across all of
+             *      them, with the supported findings its KIAN assessments published.
              */
             finding_count: number;
             /**
@@ -3383,7 +3384,8 @@ export interface components {
             environment_display_names: string[];
             /**
              * Format: int64
-             * @description How many findings this review's assessments recorded, across all of them.
+             * @description How many findings this review's assessments recorded, across all of
+             *      them, with the supported findings its KIAN assessments published.
              */
             finding_count: number;
             /**
