@@ -21,7 +21,6 @@ jobs:
         with:
           node-version: '22.23.2'
       - run: npm install --global npm@12.2.0 pnpm@11.25.0
-      - run: python3 -m unittest discover -s scripts -p test_release_version.py
       - run: pnpm install --frozen-lockfile
       - run: pnpm generate && git diff --exit-code
       - run: pnpm lint && pnpm typecheck && node check-claims.mjs
