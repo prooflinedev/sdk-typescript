@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import { once } from "node:events";
 import {
   cp,
+  mkdir,
   mkdtemp,
   readFile,
   rm,
@@ -449,6 +450,227 @@ test("coverage file uploads refuse locally what the server would refuse", async 
       files: ["absent.info"],
     }),
     { code: "ENOENT" },
+  );
+  assert.equal(fixture.calls.length, 0);
+});
+
+async function gitRepo(t, config = {}) {
+  const dir = await mkdtemp(join(tmpdir(), "proofline-patch-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const git = (...args) =>
+    execFileSync("git", ["-c", "commit.gpgsign=false", ...args], {
+      cwd: dir,
+      encoding: "utf8",
+    });
+  git("init", "-q", "-b", "main");
+  for (const [key, value] of Object.entries({
+    "user.email": "dev@example.com",
+    "user.name": "dev",
+    "core.autocrlf": "false",
+    ...config,
+  }))
+    git("config", key, value);
+  return { dir, git };
+}
+
+const patchResponse = {
+  review_id: reviewId,
+  existing: false,
+  patch_digest: "d".repeat(64),
+  verify: [],
+};
+
+test("patch reviews from git keep the server's diff shape under any local configuration", async (t) => {
+  // Each setting changes what a plain `git diff` prints into a patch the server refuses.
+  const { dir, git } = await gitRepo(t, {
+    "diff.noprefix": "true",
+    "diff.mnemonicPrefix": "true",
+    "diff.renames": "copies",
+    "diff.relative": "true",
+    "diff.external": "proofline-missing-external-diff",
+    "color.ui": "always",
+  });
+  await writeFile(join(dir, "kept.txt"), "one\ntwo\nthree\nfour\nfive\n");
+  await writeFile(join(dir, "moved.txt"), "alpha\nbeta\ngamma\ndelta\n");
+  await writeFile(join(dir, "deleted.txt"), "remove me\n");
+  git("add", ".");
+  git("commit", "-qm", "base");
+  const base = git("rev-parse", "HEAD").trim();
+  await writeFile(join(dir, "kept.txt"), "one\nTWO\nthree\nfour\nfive\n");
+  git("mv", "moved.txt", "renamed.txt");
+  git("rm", "-q", "deleted.txt");
+  await writeFile(join(dir, "staged.txt"), "staged\n");
+  git("add", "staged.txt");
+  await writeFile(join(dir, "untracked.txt"), "not part of the patch\n");
+  // The documented command under a neutral configuration.
+  const expected = execFileSync(
+    "git",
+    [
+      "-c",
+      "diff.noprefix=false",
+      "-c",
+      "diff.mnemonicPrefix=false",
+      "-c",
+      "diff.renames=true",
+      "-c",
+      "diff.relative=false",
+      "diff",
+      "--no-ext-diff",
+      "--no-color",
+      base,
+    ],
+    { cwd: dir, encoding: "utf8" },
+  );
+  const fixture = await server(t, (_request, response) =>
+    json(response, 201, patchResponse),
+  );
+  const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
+  const parameters = { path: { org_id: orgId, repo_id: repoId } };
+  const result = await client.requestPatchReviewFromGit(parameters, {
+    base: base.slice(0, 10),
+    cwd: dir,
+    verify_finding_ids: [findingId],
+    trigger_source: "HOOK_PRE_PUSH",
+  });
+  assert.deepEqual(result, patchResponse);
+  assert.equal(fixture.calls.length, 1);
+  assert.equal(fixture.calls[0].method, "POST");
+  assert.equal(
+    fixture.calls[0].url,
+    `/api/v1/organizations/${orgId}/repositories/${repoId}/patch-reviews`,
+  );
+  const body = JSON.parse(fixture.calls[0].body);
+  assert.deepEqual(body, {
+    base_commit_sha: base,
+    patch: expected,
+    verify_finding_ids: [findingId],
+    trigger_source: "HOOK_PRE_PUSH",
+  });
+  assert.match(body.patch, /^diff --git a\/kept\.txt b\/kept\.txt$/m);
+  assert.match(body.patch, /^rename from moved\.txt$/m);
+  assert.doesNotMatch(body.patch, /untracked|^copy from/m);
+  assert.equal(body.patch.includes("\u001b["), false);
+
+  // A branch name resolves to the same full SHA, from a subdirectory too.
+  await mkdir(join(dir, "nested"));
+  await client.requestPatchReviewFromGit(parameters, {
+    base: "main",
+    cwd: join(dir, "nested"),
+  });
+  assert.deepEqual(JSON.parse(fixture.calls[1].body), {
+    base_commit_sha: base,
+    patch: expected,
+  });
+});
+
+test("patch reviews from git with a head send only the committed range", async (t) => {
+  const { dir, git } = await gitRepo(t);
+  await writeFile(join(dir, "app.txt"), "v1\n");
+  git("add", ".");
+  git("commit", "-qm", "base");
+  await writeFile(join(dir, "app.txt"), "v2\n");
+  git("commit", "-qam", "change");
+  const head = git("rev-parse", "HEAD").trim();
+  await writeFile(join(dir, "app.txt"), "uncommitted\n");
+  const fixture = await server(t, (_request, response) =>
+    json(response, 201, patchResponse),
+  );
+  const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
+  await client.requestPatchReviewFromGit(
+    { path: { org_id: orgId, repo_id: repoId } },
+    { base: "HEAD~1", head, cwd: dir },
+  );
+  const body = JSON.parse(fixture.calls[0].body);
+  assert.equal(body.base_commit_sha, git("rev-parse", "HEAD~1").trim());
+  assert.match(body.patch, /^-v1\n\+v2$/m);
+  assert.doesNotMatch(body.patch, /uncommitted/);
+});
+
+test("patch reviews from git refuse locally what the server would refuse", async (t) => {
+  const { dir, git } = await gitRepo(t);
+  await writeFile(join(dir, "kept.txt"), "kept\n");
+  git("add", ".");
+  git("commit", "-qm", "base");
+  const base = git("rev-parse", "HEAD").trim();
+  const blob = execFileSync("git", ["hash-object", "-w", "--stdin"], {
+    cwd: dir,
+    input: "kept.txt",
+    encoding: "utf8",
+  }).trim();
+  // Symbolic links and submodules are written to the index directly, so the
+  // test needs neither symlink permission nor a second repository.
+  git("update-index", "--add", "--cacheinfo", `120000,${blob},link`);
+  git("commit", "-qm", "link");
+  const withLink = git("rev-parse", "HEAD").trim();
+  git("rm", "-q", "--cached", "link");
+  git("commit", "-qm", "unlink");
+  const unlinked = git("rev-parse", "HEAD").trim();
+  git("update-index", "--add", "--cacheinfo", `160000,${"e".repeat(40)},sub`);
+  git("commit", "-qm", "submodule");
+  const withSubmodule = git("rev-parse", "HEAD").trim();
+  git("rm", "-q", "--cached", "sub");
+  git("commit", "-qm", "clean");
+  const clean = git("rev-parse", "HEAD").trim();
+  const many = Array.from({ length: 3_001 }, (_, index) => `many/${index}.txt`);
+  await mkdir(join(dir, "many"));
+  for (const path of many) await writeFile(join(dir, path), "x\n");
+  git("add", "many");
+  git("commit", "-qm", "many");
+  const manyFiles = git("rev-parse", "HEAD").trim();
+
+  const fixture = await server(t, (_request, response) =>
+    json(response, 500, {}),
+  );
+  const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
+  const parameters = { path: { org_id: orgId, repo_id: repoId } };
+  const review = (changes) =>
+    client.requestPatchReviewFromGit(parameters, { cwd: dir, ...changes });
+  const refusals = [
+    [{ base: "" }, /base must name a commit/],
+    [{ base: "--output=stolen" }, /base must name a commit/],
+    [{ base: "no-such-branch" }, /base "no-such-branch" names no commit/],
+    [{ base, head: "-p" }, /head must name a commit/],
+    [{ base, head: "missing" }, /head "missing" names no commit/],
+    [{ base: clean, head: clean }, /no changes to review/],
+    [{ base, head: withLink }, /link is a symbolic link/],
+    [{ base: unlinked, head: withSubmodule }, /sub is a submodule/],
+    [{ base: clean, head: manyFiles }, /3001 files; .* at most 3000/],
+  ];
+  for (const [changes, message] of refusals)
+    await assert.rejects(
+      review(changes),
+      (error) => error instanceof TypeError && message.test(error.message),
+      String(message),
+    );
+
+  git("checkout", "-q", clean);
+  await writeFile(join(dir, "kept.txt"), Buffer.from([0x6b, 0x00, 0xff, 0x0a]));
+  await assert.rejects(
+    review({ base: clean }),
+    (error) => error instanceof TypeError && /binary file/.test(error.message),
+  );
+  await writeFile(join(dir, "kept.txt"), Buffer.from("caf\xe9\n", "latin1"));
+  await assert.rejects(
+    review({ base: clean }),
+    (error) =>
+      error instanceof TypeError && /patch is not UTF-8/.test(error.message),
+  );
+  await writeFile(join(dir, "kept.txt"), `${"y".repeat(1023)}\n`.repeat(5_200));
+  await assert.rejects(
+    review({ base: clean }),
+    (error) => error instanceof TypeError && /5 MiB/.test(error.message),
+  );
+
+  const outside = await mkdtemp(join(tmpdir(), "proofline-not-a-repo-"));
+  t.after(() => rm(outside, { recursive: true, force: true }));
+  await assert.rejects(
+    client.requestPatchReviewFromGit(parameters, {
+      base: "HEAD",
+      cwd: outside,
+    }),
+    (error) =>
+      !(error instanceof TypeError) &&
+      /git rev-parse failed: fatal: not a git repository/i.test(error.message),
   );
   assert.equal(fixture.calls.length, 0);
 });
