@@ -1770,12 +1770,23 @@ test("iterExportPages follows opaque cursors lazily and preserves filters", asyn
       format: "ndjson",
     },
   };
+  const earlyIterator = client.iterExportPages(parameters);
+  assert.equal(calls.length, 0);
+  const earlyPage = await earlyIterator.next();
+  assert.equal(earlyPage.done, false);
+  assert.equal(calls.length, 1);
+  await earlyIterator.return();
+  assert.equal(calls.length, 1);
+  calls.length = 0;
+
   const iterator = client.iterExportPages(parameters);
   assert.equal(calls.length, 0);
   const first = await iterator.next();
   assert.deepEqual(first.value.rows[0].cursor, "first");
   assert.equal(calls.length, 1);
   first.value.nextCursor = null;
+  parameters.path.dataset = "findings";
+  parameters.query.format = "csv";
   assert.deepEqual((await iterator.next()).value.rows[0].cursor, "opaque/+cursor");
   assert.equal(calls.length, 2);
   const last = await iterator.next();
@@ -1798,7 +1809,9 @@ test("iterExportPages follows opaque cursors lazily and preserves filters", asyn
 });
 
 test("iterExportPages refuses cursor loops and exhausted page bounds", async (t) => {
+  let cycleCalls = 0;
   const { baseUrl: cycleBaseUrl } = await server(t, (_request, response) => {
+    cycleCalls += 1;
     response.writeHead(200, {
       "content-type": "application/x-ndjson",
       "x-proofline-export-version": "1",
@@ -1819,6 +1832,7 @@ test("iterExportPages refuses cursor loops and exhausted page bounds", async (t)
       error instanceof ProoflineError &&
       error.type === "urn:proofline:sdk:invalid-response",
   );
+  assert.equal(cycleCalls, 2);
 
   let boundedPage = 0;
   const { baseUrl: boundedBaseUrl } = await server(t, (_request, response) => {
