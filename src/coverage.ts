@@ -1,4 +1,4 @@
-import { readFile, stat } from "node:fs/promises";
+import { readFile, realpath, stat } from "node:fs/promises";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import type { UploadCoverageReportsBody } from "./operations.js";
 
@@ -53,14 +53,42 @@ export async function readCoverageFiles(
   if (upload.files.length < 1 || upload.files.length > MAX_REPORTS)
     throw new TypeError(`upload 1 to ${MAX_REPORTS} coverage reports`);
   const root = resolve(upload.root ?? ".");
-  const files = upload.files.map((file) => {
-    const entry = typeof file === "string" ? { path: file } : file;
-    const path = resolve(root, entry.path);
-    const name = reportName(
-      entry.name ?? relative(root, path).split(sep).join("/"),
-    );
-    return { path, name };
-  });
+  const realRoot = await realpath(root);
+
+  const files = await Promise.all(
+    upload.files.map(async (file) => {
+      const entry = typeof file === "string" ? { path: file } : file;
+      const path = resolve(root, entry.path);
+      const relativePath = relative(root, path);
+
+      if (
+        relativePath === "" ||
+        relativePath === ".." ||
+        relativePath.startsWith(`..${sep}`) ||
+        isAbsolute(relativePath)
+      )
+        throw new TypeError(
+          `coverage report path ${JSON.stringify(entry.path)} must be inside root`,
+        );
+
+      const actualPath = await realpath(path);
+      const actualRelativePath = relative(realRoot, actualPath);
+
+      if (
+        actualRelativePath === "" ||
+        actualRelativePath === ".." ||
+        actualRelativePath.startsWith(`..${sep}`) ||
+        isAbsolute(actualRelativePath)
+      )
+        throw new TypeError(
+          `coverage report path ${JSON.stringify(entry.path)} must be inside root`,
+        );
+
+      const name = reportName(entry.name ?? relativePath.split(sep).join("/"));
+
+      return { path: actualPath, name };
+    }),
+  );
   const names = new Set(files.map((file) => file.name));
   if (names.size !== files.length)
     throw new TypeError("coverage report names must be unique");
