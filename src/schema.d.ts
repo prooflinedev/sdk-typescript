@@ -836,6 +836,10 @@ export interface components {
         };
         /** @description One deploy of the commit and where its verification stands. */
         CommitDeploy: {
+            /** @description The provider of an AWS deploy (`AWS_CODEPIPELINE` or `AWS_AMPLIFY`). */
+            aws_provider?: string | null;
+            /** @description The `CodePipeline` execution ID or Amplify job ID. */
+            aws_run_id?: string | null;
             /**
              * @description The four checks in order, each with its recorded result, if any, and
              *      when a missing one becomes overdue. Empty when no verification of
@@ -858,7 +862,7 @@ export interface components {
              *      deployment a pipeline created, or each one an Actions run's jobs
              *      created. A deployment outside Actions is a deploy of its own, so two
              *      of one commit, GitHub Environment and task read apart by this ID.
-             *      Every listed deploy holds one; a server from before the field existed
+             *      Every GitHub deploy holds one; a server from before the field existed
              *      omits it.
              */
             github_deployment_ids?: number[];
@@ -2283,7 +2287,7 @@ export interface components {
         /** @enum {string} */
         FindingOutcomesPostMergeOutcome: "ADDRESSED" | "NOT_ADDRESSED" | "INCOMPLETE";
         /** @enum {string} */
-        FindingOutcomesSelector: "outcome" | "code_changed" | "post_merge";
+        FindingOutcomesSelector: "outcome" | "code_changed" | "post_merge" | "published";
         FindingOutcomesValidationSources: {
             /**
              * Format: int64
