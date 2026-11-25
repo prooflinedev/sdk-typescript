@@ -25,17 +25,19 @@ async function fixture(t) {
   const http = createServer(async (request, response) => {
     const chunks = [];
     for await (const chunk of request) chunks.push(chunk);
-    const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-    requests.push({ url: request.url, body });
+    requests.push({
+      url: request.url,
+      rawBody: Buffer.concat(chunks).toString("utf8"),
+    });
     response.writeHead(201, { "Content-Type": "application/json" });
     response.end(
       JSON.stringify({
         report_id: "00000000-0000-4000-8000-000000000005",
         created: true,
-        tested_sha: body.tested_sha,
+        tested_sha: firstSha,
         formats: ["LCOV"],
         instrumented_lines: 1,
-        covered_lines: body.reports[0].content === firstContent ? 1 : 0,
+        covered_lines: 1,
       }),
     );
   });
@@ -52,7 +54,12 @@ async function fixture(t) {
     baseUrl: `http://127.0.0.1:${http.address().port}`,
     token: "synthetic-coverage-token",
   });
-  return { root, requests, client };
+  return {
+    root,
+    requests,
+    client,
+    baseUrl: `http://127.0.0.1:${http.address().port}`,
+  };
 }
 
 function expected(org, repo, sha, name, content) {
@@ -60,6 +67,14 @@ function expected(org, repo, sha, name, content) {
     url: `/api/v1/organizations/${org}/repositories/${repo}/coverage-reports`,
     body: { tested_sha: sha, reports: [{ name, content }] },
   };
+}
+
+function parsedRequests(requests) {
+  // Parse in the awaited test so a malformed request produces a direct failure.
+  return requests.map(({ url, rawBody }) => ({
+    url,
+    body: JSON.parse(rawBody),
+  }));
 }
 
 for (const replacePath of [false, true]) {
@@ -83,8 +98,9 @@ for (const replacePath of [false, true]) {
     await Promise.all([first, second]);
 
     assert.equal(requests.length, 2);
+    const parsed = parsedRequests(requests);
     const byReport = (name) =>
-      requests.find((request) => request.body.reports[0].name === name);
+      parsed.find((request) => request.body.reports[0].name === name);
     assert.deepEqual(
       byReport("first.info"),
       expected(firstOrg, firstRepo, firstSha, "first.info", firstContent),
@@ -105,7 +121,22 @@ test("coverage uploads send the SHA that passed validation", async (t) => {
   const pending = client.uploadCoverageFiles(parameters, upload);
   upload.tested_sha = "main";
   await pending;
-  assert.deepEqual(requests, [
+  assert.deepEqual(parsedRequests(requests), [
     expected(firstOrg, firstRepo, firstSha, "first.info", firstContent),
   ]);
+});
+
+test("coverage fixture responds even when the captured request is malformed", async (t) => {
+  const { baseUrl, requests } = await fixture(t);
+  for (const rawBody of ["{", '{"reports":[]}']) {
+    const response = await fetch(baseUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: rawBody,
+      signal: AbortSignal.timeout(2_000),
+    });
+    assert.equal(response.status, 201);
+    assert.equal((await response.json()).tested_sha, firstSha);
+    assert.equal(requests.at(-1).rawBody, rawBody);
+  }
 });
