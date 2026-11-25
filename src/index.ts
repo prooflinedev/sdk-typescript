@@ -23,6 +23,7 @@ import {
 export type { ExportPage, ExportParameters } from "./exports.js";
 
 import {
+  type ListPullRequestReviewsParameters,
   type ListReviewsParameters,
   Operations,
   type UploadCoverageReportsParameters,
@@ -177,6 +178,55 @@ export class ProoflineClient extends Operations {
         ...(cursor === undefined ? {} : { cursor }),
       };
       const page = await this.listReviews({ ...parameters, query });
+      if (
+        !isObject(page) ||
+        !Array.isArray(page.items) ||
+        typeof page.truncated !== "boolean" ||
+        (page.next_cursor !== undefined &&
+          page.next_cursor !== null &&
+          typeof page.next_cursor !== "string")
+      )
+        throw protocol("the review page has no typed collection metadata");
+      for (const item of page.items) {
+        if (count >= maxItems)
+          throw paginationLimit("the review collection exceeds maxItems");
+        count += 1;
+        yield item;
+      }
+      if (!page.truncated) {
+        if (page.next_cursor)
+          throw protocol(
+            "the review page has an unexpected continuation cursor",
+          );
+        return;
+      }
+      if (
+        !page.next_cursor ||
+        page.next_cursor === cursor ||
+        seen.has(page.next_cursor)
+      )
+        throw protocol("the review collection has no advancing cursor");
+      seen.add(page.next_cursor);
+      cursor = page.next_cursor;
+    }
+    throw paginationLimit("the review collection exceeds maxPages");
+  }
+
+  async *iterPullRequestReviews(
+    parameters: ListPullRequestReviewsParameters,
+    options: { maxPages?: number; maxItems?: number } = {},
+  ): AsyncGenerator<components["schemas"]["ReviewSummary"]> {
+    const maxPages = integerLimit(options.maxPages ?? 100, "maxPages");
+    const maxItems = integerLimit(options.maxItems ?? 10_000, "maxItems");
+    const seen = new Set<string>();
+    let count = 0;
+    let cursor = parameters.query?.cursor;
+    for (let index = 0; index < maxPages; index += 1) {
+      const query = {
+        ...parameters.query,
+        ...(cursor === undefined ? {} : { cursor }),
+      };
+      const page = await this.listPullRequestReviews({ ...parameters, query });
       if (
         !isObject(page) ||
         !Array.isArray(page.items) ||
