@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { createServer } from "node:http";
+import { createServer, request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -24,7 +24,12 @@ async function fixture(t) {
   const requests = [];
   const http = createServer(async (request, response) => {
     const chunks = [];
-    for await (const chunk of request) chunks.push(chunk);
+    try {
+      for await (const chunk of request) chunks.push(chunk);
+    } catch {
+      response.destroy();
+      return;
+    }
     requests.push({
       url: request.url,
       rawBody: Buffer.concat(chunks).toString("utf8"),
@@ -55,6 +60,7 @@ async function fixture(t) {
     token: "synthetic-coverage-token",
   });
   return {
+    http,
     root,
     requests,
     client,
@@ -139,4 +145,28 @@ test("coverage fixture responds even when the captured request is malformed", as
     assert.equal((await response.json()).tested_sha, firstSha);
     assert.equal(requests.at(-1).rawBody, rawBody);
   }
+});
+
+test("coverage fixture handles a connection closed mid-body", {
+  timeout: 5_000,
+}, async (t) => {
+  const { http, baseUrl, requests } = await fixture(t);
+  const incoming = once(http, "request");
+  const outgoing = httpRequest(baseUrl, {
+    method: "POST",
+    headers: { "Content-Length": "100" },
+  });
+  outgoing.on("error", () => {});
+  t.after(() => outgoing.destroy());
+  outgoing.write("{");
+  const [request] = await incoming;
+  const closed = new Promise((resolve) => request.once("close", resolve));
+  outgoing.destroy();
+  await closed;
+
+  assert.equal(requests.length, 0);
+  const response = await fetch(baseUrl, { method: "POST", body: "{}" });
+  assert.equal(response.status, 201);
+  await response.json();
+  assert.equal(requests.length, 1);
 });
