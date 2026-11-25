@@ -59,6 +59,8 @@ console.log(report.report_id, report.created);
 
 To upload reports straight from disk, `uploadCoverageFiles` reads each file as UTF-8 text and names it by its path relative to `root`, which defaults to the working directory. Pass `{ path, name }` to choose a different report name.
 
+Each call retains its original organization, repository, tested commit, and report paths while reading files. Reusing or changing the input objects for another upload does not retarget an upload already in progress. The files themselves are read asynchronously; finish writing the reports before starting the upload.
+
 ```typescript
 const report = await client.uploadCoverageFiles(
   { path: { org_id: organizationId, repo_id: repositoryId } },

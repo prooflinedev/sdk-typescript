@@ -156,10 +156,9 @@ export class ProoflineClient extends Operations {
     parameters: UploadCoverageReportsParameters,
     upload: CoverageFilesUpload,
   ): Promise<components["schemas"]["CoverageUploadResponse"]> {
-    return this.uploadCoverageReports(
-      parameters,
-      await readCoverageFiles(upload),
-    );
+    // Keep the target paired with these reports while their files are read.
+    const target = { ...parameters, path: { ...parameters.path } };
+    return this.uploadCoverageReports(target, await readCoverageFiles(upload));
   }
 
   async *iterReviews(

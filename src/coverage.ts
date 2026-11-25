@@ -48,7 +48,8 @@ function reportName(name: string): string {
 export async function readCoverageFiles(
   upload: CoverageFilesUpload,
 ): Promise<UploadCoverageReportsBody> {
-  if (!/^[0-9a-f]{40}$/i.test(upload.tested_sha))
+  const testedSha = upload.tested_sha;
+  if (!/^[0-9a-f]{40}$/i.test(testedSha))
     throw new TypeError("tested_sha must be a full 40-character commit SHA");
   if (upload.files.length < 1 || upload.files.length > MAX_REPORTS)
     throw new TypeError(`upload 1 to ${MAX_REPORTS} coverage reports`);
@@ -82,7 +83,7 @@ export async function readCoverageFiles(
     }
     reports.push({ name: file.name, content });
   }
-  const body = { tested_sha: upload.tested_sha, reports };
+  const body = { tested_sha: testedSha, reports };
   if (Buffer.byteLength(JSON.stringify(body)) > MAX_BODY_BYTES)
     throw new TypeError("coverage reports exceed the 30 MiB upload limit");
   return body;
