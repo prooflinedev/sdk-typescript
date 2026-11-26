@@ -1564,6 +1564,58 @@ test("pagination keeps filters and refuses cycles, incomplete metadata and resou
   );
 });
 
+test("collectReviews gathers paginated review summaries and honors bounds", async (t) => {
+  const http = await import("node:http");
+  let pageIndex = 0;
+  const server = http.createServer((req, res) => {
+    const parsed = new URL(req.url ?? "/", "http://127.0.0.1");
+    const cursor = parsed.searchParams.get("cursor");
+    pageIndex += 1;
+    const isSecondPage = cursor === "page-2";
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(
+      JSON.stringify({
+        items: isSecondPage
+          ? [{ id: "rev-2", status: "COMPLETED" }]
+          : [{ id: "rev-1", status: "COMPLETED" }],
+        truncated: !isSecondPage,
+        next_cursor: isSecondPage ? null : "page-2",
+        filters: { repositories: [], environments: [], authors: [] },
+      }),
+    );
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => server.close());
+  const addr = server.address();
+  const baseUrl = `http://127.0.0.1:${addr.port}`;
+  const client = new ProoflineClient({ baseUrl, token: "test-token" });
+  const parameters = {
+    path: { org_id: "org-1" },
+    query: { repository: "repo-1" },
+  };
+
+  const collected = await client.collectReviews(parameters);
+  assert.deepEqual(
+    collected.map((item) => item.id),
+    ["rev-1", "rev-2"],
+  );
+  assert.equal(pageIndex, 2);
+
+  const requestsBeforeMaxPages = pageIndex;
+  await assert.rejects(
+    () => client.collectReviews(parameters, { maxPages: 1 }),
+    (error) => error instanceof ProoflineError && error.status === 0,
+  );
+  assert.equal(pageIndex - requestsBeforeMaxPages, 1);
+
+  await assert.rejects(
+    client.collectReviews(parameters, { maxItems: 1 }),
+    (error) =>
+      error instanceof ProoflineError &&
+      error.type === "urn:proofline:sdk:pagination-limit",
+  );
+});
+
 test("credentials remain on the configured origin and malformed responses carry no raw body", async (t) => {
   for (const baseUrl of [
     "http://customer.example",
