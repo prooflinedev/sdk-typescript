@@ -361,7 +361,7 @@ test("coverage uploads preserve the tested commit, report text and server refusa
 test("coverage file uploads send report text as written under relative names", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "proofline-coverage-"));
   t.after(() => rm(root, { recursive: true, force: true }));
-  const lcov = "﻿SF:src/app.ts\r\nDA:1,1\r\nend_of_record\r\n";
+  const lcov = "∩╗┐SF:src/app.ts\r\nDA:1,1\r\nend_of_record\r\n";
   const go = "mode: set\nexample/main.go:1.1,1.2 1 0\n";
   await writeFile(join(root, "lcov.info"), lcov);
   await writeFile(join(root, "go.out"), go);
@@ -2098,7 +2098,13 @@ test("a new public operation generates a callable typed client method", async (t
     },
   };
   await writeFile(join(work, "openapi.public.json"), JSON.stringify(spec));
-  execFileSync("pnpm", ["run", "generate"], { cwd: work });
+  execFileSync(
+    process.platform === "win32" ? "cmd.exe" : "pnpm",
+    process.platform === "win32"
+      ? ["/d", "/s", "/c", "pnpm run generate"]
+      : ["run", "generate"],
+    { cwd: work },
+  );
   await writeFile(
     join(work, "src", "example-check.ts"),
     `import type { ProoflineClient } from "./index.js";
@@ -2106,7 +2112,13 @@ export async function answer(client: ProoflineClient): Promise<string> {
   return (await client.readExample({ path: { item: 7 } })).answer;
 }`,
   );
-  execFileSync("pnpm", ["run", "build"], { cwd: work });
+  execFileSync(
+    process.platform === "win32" ? "cmd.exe" : "pnpm",
+    process.platform === "win32"
+      ? ["/d", "/s", "/c", "pnpm run build"]
+      : ["run", "build"],
+    { cwd: work },
+  );
   const built = await import(
     pathToFileURL(join(work, "dist", "index.js")).href
   );
