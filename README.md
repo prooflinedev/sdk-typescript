@@ -154,6 +154,28 @@ if (result.isError) throw new Error("Re-verification was refused.");
 
 The commit must be the live pushed head, which the server confirms. Each request accepts 1 to 20 distinct findings from one review and an optional note of 1 to 2,000 characters. Reads require `reviews:read`; requesting re-verification also requires `reviews:request` and repository write access. Calls never retry. Results retain untrusted-text wrappers, availability, assessment gaps, and `isError`. `PENDING` and `NOT_VERIFIED` do not establish a fix, and a tool request never records a human disposition.
 
+## Local re-verification before a push
+
+A patch review requested with `verify_finding_ids` re-verifies those open findings of one pull request against unpushed changes, as `proofline review --verify` does. `waitForLocalReverification` waits for that review and returns one outcome for each finding you name.
+
+```typescript
+const requested = await client.requestPatchReview(
+  { path: { org_id: organizationId, repo_id: repositoryId } },
+  { base_commit_sha: baseCommitSha, patch, verify_finding_ids: findingIds },
+);
+const result = await client.waitForLocalReverification(
+  organizationId, requested.review_id, findingIds,
+);
+for (const item of result.reverifications) {
+  if (item.outcome !== "RESOLVED_VERIFIED")
+    console.error(item.findingId, item.outcome, item.reason ?? "");
+}
+```
+
+The result has the fields of `waitForReview` and `reverifications`: one entry for each finding named, in the order named, with `findingId`, `outcome`, `iteration`, `checks` and `reason`. A recorded `RESOLVED_VERIFIED`, `STILL_PRESENT` or `NOT_VERIFIED` is returned as recorded. Anything else is `PENDING` when the wait timed out and `NOT_VERIFIED` once the review has settled. That covers a finding the review does not list, an outcome this SDK does not know, and a finding the review left pending when it ended. `reason` then says what the SDK saw, and is null for a recorded outcome. `checks` is the server's JSON as returned.
+
+Finding IDs that are missing, empty or repeated throw a `TypeError` before any request, and a malformed list throws `ProoflineError` with the type `urn:proofline:sdk:invalid-response`. The outcome is local: the pull request's finding is unchanged whatever it is, and `PENDING` and `NOT_VERIFIED` do not establish a fix. The request needs an API token with `reviews:request`, is sent once, and counts toward the limits of 3 requests for a finding on one patch, which `iteration` numbers, and 10 for a pull request in an hour. Waiting again for the same review ID sends no new request; it reads the review, which needs `reviews:read`. After the push, `client.fixes.requestReverification` asks for the re-verification at the pushed commit.
+
 ## Contributing and development
 
 The repository bundles its public API contract in `openapi.public.json`. New public operations generate typed methods on `ProoflineClient` from their OpenAPI operation IDs. To regenerate the client and verify changes locally, run `pnpm install --frozen-lockfile`, `pnpm generate`, `pnpm build`, `pnpm lint`, `pnpm typecheck`, and `pnpm test`.
