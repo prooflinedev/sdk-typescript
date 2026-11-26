@@ -2479,3 +2479,221 @@ export async function use(client: ProoflineClient): Promise<void> {
     fixture,
   ]);
 });
+
+test("MCP calls isolate nested arguments across concurrent handshakes", async (t) => {
+  const pending = [];
+  const { baseUrl } = await server(t, (_request, response, seen) => {
+    const body = JSON.parse(seen.at(-1).body);
+    if (body.method === "initialize") {
+      const reply = () =>
+        json(response, 200, {
+          jsonrpc: "2.0",
+          id: 1,
+          result: { protocolVersion: "2025-11-25" },
+        });
+      pending.push(reply);
+      if (pending.length === 2) for (const send of pending.splice(0)) send();
+      return;
+    }
+    if (body.method === "notifications/initialized") {
+      response.writeHead(202);
+      return response.end();
+    }
+    json(response, 200, {
+      jsonrpc: "2.0",
+      id: 2,
+      result: {
+        content: [{ type: "text", text: "ok" }],
+        structuredContent: { arguments: body.params.arguments },
+      },
+    });
+  });
+
+  const client = new ProoflineClient({ baseUrl, token });
+  const args = {
+    review_id: reviewId,
+    finding_ids: [findingId],
+    commit_sha: "a".repeat(40),
+    note: "reverify fix",
+  };
+  const first = client.fixes.requestReverification(args);
+  args.finding_ids.push(reviewId);
+  const second = client.fixes.requestReverification(args);
+  const [firstResult, secondResult] = await Promise.all([first, second]);
+
+  assert.deepEqual(firstResult.structuredContent.arguments, {
+    review_id: reviewId,
+    finding_ids: [findingId],
+    commit_sha: "a".repeat(40),
+    note: "reverify fix",
+  });
+  assert.deepEqual(secondResult.structuredContent.arguments, {
+    review_id: reviewId,
+    finding_ids: [findingId, reviewId],
+    commit_sha: "a".repeat(40),
+    note: "reverify fix",
+  });
+});
+
+test("MCP calls preserve enumerable properties on objects with custom toJSON", async (t) => {
+  let sentArguments;
+  const { baseUrl } = await server(t, (_request, response, seen) => {
+    const body = JSON.parse(seen.at(-1).body);
+    if (body.method === "initialize") {
+      return json(response, 200, {
+        jsonrpc: "2.0",
+        id: 1,
+        result: { protocolVersion: "2025-11-25" },
+      });
+    }
+    if (body.method === "notifications/initialized") {
+      response.writeHead(202);
+      return response.end();
+    }
+    sentArguments = body.params.arguments;
+    json(response, 200, {
+      jsonrpc: "2.0",
+      id: 2,
+      result: { content: [{ type: "text", text: "ok" }] },
+    });
+  });
+
+  class CustomArgs {
+    constructor() {
+      this.repository = "owner/name";
+      this.page_key = "index";
+      this.organization_id = orgId;
+    }
+    toJSON() {
+      return { repository: this.repository, page_key: this.page_key };
+    }
+  }
+
+  const client = new ProoflineClient({ baseUrl, token });
+  await client.knowledge.getWikiPage(new CustomArgs());
+  assert.deepEqual(sentArguments, {
+    repository: "owner/name",
+    page_key: "index",
+    organization_id: orgId,
+  });
+});
+
+test("MCP request size enforces the 8192-byte envelope limit pre-flight", async (t) => {
+  const encoder = new TextEncoder();
+  const baseArgs = { repository: "owner/name", question: "" };
+  const baseEnvelopeLength = encoder.encode(
+    JSON.stringify({
+      jsonrpc: "2.0",
+      id: 2,
+      method: "tools/call",
+      params: { name: "ask_codebase", arguments: baseArgs },
+    }),
+  ).length;
+  const maxFittingQuestion = "x".repeat(8192 - baseEnvelopeLength);
+  const exact8192Envelope = JSON.stringify({
+    jsonrpc: "2.0",
+    id: 2,
+    method: "tools/call",
+    params: {
+      name: "ask_codebase",
+      arguments: { repository: "owner/name", question: maxFittingQuestion },
+    },
+  });
+  assert.equal(encoder.encode(exact8192Envelope).length, 8192);
+
+  let acceptedRawBody;
+  const okFixture = await server(t, (_request, response, seen) => {
+    const rawBody = seen.at(-1).body;
+    const body = JSON.parse(rawBody);
+    if (body.method === "initialize") {
+      return json(response, 200, {
+        jsonrpc: "2.0",
+        id: 1,
+        result: { protocolVersion: "2025-11-25" },
+      });
+    }
+    if (body.method === "notifications/initialized") {
+      response.writeHead(202);
+      return response.end();
+    }
+    acceptedRawBody = rawBody;
+    json(response, 200, {
+      jsonrpc: "2.0",
+      id: 2,
+      result: { content: [{ type: "text", text: "ok" }] },
+    });
+  });
+  const okClient = new ProoflineClient({
+    baseUrl: okFixture.baseUrl,
+    token,
+  });
+  const accepted = await okClient.knowledge.askCodebase({
+    repository: "owner/name",
+    question: maxFittingQuestion,
+  });
+  assert.equal(accepted.content[0].text, "ok");
+  assert.equal(acceptedRawBody, exact8192Envelope);
+  assert.equal(okFixture.calls.length, 3);
+
+  const rejectFixture = await server(t, (_request, response) =>
+    json(response, 500, {}),
+  );
+  const rejectClient = new ProoflineClient({
+    baseUrl: rejectFixture.baseUrl,
+    token,
+  });
+
+  const envelopeOverflowQuestion = "x".repeat(8192 - baseEnvelopeLength + 1);
+  assert.ok(
+    encoder.encode(
+      JSON.stringify({
+        repository: "owner/name",
+        question: envelopeOverflowQuestion,
+      }),
+    ).length <= 8192,
+  );
+
+  for (const question of [
+    envelopeOverflowQuestion,
+    "x".repeat(8192),
+    "é".repeat(4100),
+  ]) {
+    await assert.rejects(
+      rejectClient.knowledge.askCodebase({
+        repository: "owner/name",
+        question,
+      }),
+      (error) =>
+        error instanceof TypeError &&
+        error.message === "MCP request exceeds 8192 bytes",
+    );
+  }
+
+  const circularArgs = { repository: "owner/name", question: "circular" };
+  circularArgs.self = circularArgs;
+  await assert.rejects(
+    rejectClient.knowledge.askCodebase(circularArgs),
+    TypeError,
+  );
+
+  Object.defineProperty(Object.prototype, "toJSON", {
+    value: () => undefined,
+    configurable: true,
+    writable: true,
+  });
+  try {
+    await assert.rejects(
+      rejectClient.knowledge.askCodebase({
+        repository: "owner/name",
+        question: "undefined-envelope",
+      }),
+      (error) =>
+        error instanceof TypeError &&
+        error.message === "MCP request could not be serialized to JSON",
+    );
+  } finally {
+    Reflect.deleteProperty(Object.prototype, "toJSON");
+  }
+
+  assert.equal(rejectFixture.calls.length, 0);
+});

@@ -1,4 +1,4 @@
-import { ProoflineError, type Transport } from "./transport.js";
+import { ProoflineError, rawJson, type Transport } from "./transport.js";
 
 /** Strings in tool results remain untrusted; structuredContent is server-owned JSON. */
 export interface KnowledgeResult {
@@ -15,6 +15,7 @@ export interface RepositoryKnowledge extends McpTarget {
   commit?: string;
 }
 const PROTOCOL = "2025-11-25";
+const MAX_MCP_REQUEST_BYTES = 8192;
 function object(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
@@ -42,8 +43,19 @@ export class McpTools {
   constructor(private readonly transport: Transport) {}
 
   protected async call(name: string, args: object): Promise<KnowledgeResult> {
-    // Bind the per-call target before protocol negotiation yields to the caller.
-    const callArguments = { ...args };
+    // Shallow-copy enumerable properties and serialize before protocol negotiation
+    // yields to the caller, isolating nested arguments and avoiding wasted handshakes.
+    const toolCallJson: string | undefined = JSON.stringify({
+      jsonrpc: "2.0",
+      id: 2,
+      method: "tools/call",
+      params: { name, arguments: { ...args } },
+    });
+    if (typeof toolCallJson !== "string")
+      throw new TypeError("MCP request could not be serialized to JSON");
+    if (new TextEncoder().encode(toolCallJson).length > MAX_MCP_REQUEST_BYTES)
+      throw new TypeError("MCP request exceeds 8192 bytes");
+
     const invoke = (
       body: object,
       phase: "initialize" | "notification" | "call",
@@ -85,18 +97,7 @@ export class McpTools {
       { jsonrpc: "2.0", method: "notifications/initialized" },
       "notification",
     );
-    const result = envelope(
-      await invoke(
-        {
-          jsonrpc: "2.0",
-          id: 2,
-          method: "tools/call",
-          params: { name, arguments: callArguments },
-        },
-        "call",
-      ),
-      2,
-    );
+    const result = envelope(await invoke(rawJson(toolCallJson), "call"), 2);
     if (
       !Array.isArray(result.content) ||
       result.content.some(

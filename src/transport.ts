@@ -7,6 +7,13 @@ const MAX_RETRIES = 3;
 const MAX_RETRY_SECONDS = 60;
 const inspect = Symbol.for("nodejs.util.inspect.custom");
 const secrets = new WeakMap<SecretToken, string>();
+const rawJsonBodies = new WeakMap<object, string>();
+
+export function rawJson(json: string): object {
+  const marker = {};
+  rawJsonBodies.set(marker, json);
+  return marker;
+}
 
 /** Why a review request created nothing; `reason` names the setting to change. */
 export type RunNowRefusal = components["schemas"]["RunNowRefusalView"];
@@ -450,8 +457,18 @@ export class Transport {
       if (value !== null && value !== undefined)
         url.searchParams.set(key, String(value));
     }
-    const requestBody = body === undefined ? undefined : JSON.stringify(body);
-    if (mcpPhase && new TextEncoder().encode(requestBody).length > 8192)
+
+    const requestBody =
+      body === undefined
+        ? undefined
+        : rawJsonBodies.has(body)
+          ? rawJsonBodies.get(body)
+          : JSON.stringify(body);
+    if (
+      mcpPhase &&
+      requestBody !== undefined &&
+      new TextEncoder().encode(requestBody).length > 8192
+    )
       throw new TypeError("MCP request exceeds 8192 bytes");
     for (let attempt = 0; ; attempt += 1) {
       const headers = new Headers({
