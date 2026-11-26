@@ -73,6 +73,24 @@ It throws a `TypeError` before sending anything when the SHA is abbreviated, the
 
 Send 1 to 50 LCOV, Cobertura XML, JaCoCo XML, or Go cover reports in a JSON body of at most 30 MiB. Each report name must be a unique relative path, and content must be the original report text. Repeating an identical upload returns the existing report with `created: false`. An upload receipt records evidence; it does not indicate that a coverage check is met.
 
+## Patch reviews from a Git checkout
+
+`requestPatchReview` takes a unified diff exactly as `git diff --no-ext-diff --no-color <base>` prints it, against a full commit SHA that GitHub already has. A hand-run `git diff` often differs from that shape: `diff.noprefix` or `diff.mnemonicPrefix` changes the `a/` and `b/` paths, `diff.renames=copies` can report copies, and `color.ui=always` adds escape codes. The server refuses each of these.
+
+`requestPatchReviewFromGit` builds the patch from a local checkout with fixed options that override those settings. It resolves `base` to its full commit SHA and sends the request.
+
+```typescript
+const review = await client.requestPatchReviewFromGit(
+  { path: { org_id: organizationId, repo_id: repositoryId } },
+  { base: "origin/main", trigger_source: "HOOK_PRE_PUSH" },
+);
+console.log(review.review_id, review.existing);
+```
+
+Without `head`, the patch compares the tracked files of the work tree with `base`, whether their changes are staged or not. Untracked files are not included. Pass `head` to review only a committed range instead. `cwd` selects the repository and defaults to the working directory. `verify_finding_ids` and `trigger_source` are sent unchanged.
+
+It throws a `TypeError` before sending anything when a revision is empty, starts with `-`, or names no commit. It also throws a `TypeError` when there are no changes, or when the changes include a binary file, a symbolic link, a submodule, an unmerged path, or text that is not UTF-8. The same applies to more than 3,000 files or a patch over 5 MiB. When Git is missing or the directory is not a repository, it throws an `Error` that keeps Git's message.
+
 ## Review exports
 
 `exportReviews` reads one CSV or NDJSON page through the bounded transport. Export tokens require `analytics:read`. Each call returns the original text, decoded rows, dataset version, settled horizon, and an optional next cursor. CSV cells remain strings, including nested JSON cells, while NDJSON retains JSON values. Each CSV page includes its own header.

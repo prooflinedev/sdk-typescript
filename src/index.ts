@@ -10,6 +10,10 @@ import { McpClient } from "./mcp.js";
 
 export type { McpTarget } from "./mcp.js";
 
+import { type GitPatchChanges, readGitPatch } from "./patch.js";
+
+export type { GitPatchChanges } from "./patch.js";
+
 import { KnowledgeClient } from "./knowledge.js";
 
 export type { KnowledgeResult, RepositoryKnowledge } from "./knowledge.js";
@@ -25,6 +29,7 @@ export type { ExportPage, ExportParameters } from "./exports.js";
 import {
   type ListReviewsParameters,
   Operations,
+  type RequestPatchReviewParameters,
   type UploadCoverageReportsParameters,
 } from "./operations.js";
 import type { components } from "./schema.js";
@@ -160,6 +165,18 @@ export class ProoflineClient extends Operations {
       parameters,
       await readCoverageFiles(upload),
     );
+  }
+
+  /**
+   * Builds a patch from a local Git checkout and requests its review. The patch
+   * holds the server's expected `git diff` shape whatever the local Git
+   * configuration says, and the base is resolved to its full commit SHA.
+   */
+  async requestPatchReviewFromGit(
+    parameters: RequestPatchReviewParameters,
+    changes: GitPatchChanges,
+  ): Promise<components["schemas"]["PatchReviewResponse"]> {
+    return this.requestPatchReview(parameters, await readGitPatch(changes));
   }
 
   async *iterReviews(
