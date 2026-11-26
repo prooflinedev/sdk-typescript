@@ -1514,6 +1514,14 @@ test("pagination keeps filters and refuses cycles, incomplete metadata and resou
     const cursor = new URL(request.url, "http://127.0.0.1").searchParams.get(
       "cursor",
     );
+    if (mode === "initial") {
+      return json(response, 200, {
+        items: [{ id: cursor ?? "none" }],
+        truncated: true,
+        next_cursor: cursor === "start" ? "next" : "start",
+        filters: { repositories: [], environments: [], authors: [] },
+      });
+    }
     const more = mode !== "normal" || cursor === null;
     return json(response, 200, {
       items: [{ id: cursor ? "second" : "first" }],
@@ -1532,6 +1540,34 @@ test("pagination keeps filters and refuses cycles, incomplete metadata and resou
   assert(
     fixture.calls.every(({ url }) => url.includes(`repository=${repoId}`)),
   );
+  const live = { path: { org_id: orgId }, query: { repository: repoId } };
+  const followed = client.iterReviews(live);
+  const before = fixture.calls.length;
+  await followed.next();
+  live.path.org_id = "11111111-1111-7111-8111-111111111111";
+  live.query.repository = "changed-repo";
+  await followed.next();
+  const followedUrls = fixture.calls.slice(before).map(({ url }) => url);
+  assert.equal(followedUrls.length, 2);
+  assert(
+    followedUrls.every(
+      (url) =>
+        url.includes(`/organizations/${orgId}/reviews`) &&
+        url.includes(`repository=${repoId}`),
+    ),
+  );
+  mode = "initial";
+  const initialCalls = fixture.calls.length;
+  await assert.rejects(
+    Array.fromAsync(
+      client.iterReviews({
+        path: { org_id: orgId },
+        query: { repository: repoId, cursor: "start" },
+      }),
+    ),
+    (error) => error.type === "urn:proofline:sdk:invalid-response",
+  );
+  assert.equal(fixture.calls.length - initialCalls, 2);
   mode = "cycle";
   await assert.rejects(
     Array.fromAsync(client.iterReviews(parameters)),
