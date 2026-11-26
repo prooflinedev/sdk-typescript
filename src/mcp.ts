@@ -42,8 +42,13 @@ export class McpTools {
   constructor(private readonly transport: Transport) {}
 
   protected async call(name: string, args: object): Promise<KnowledgeResult> {
-    // Bind the per-call target before protocol negotiation yields to the caller.
-    const callArguments = { ...args };
+    // Bind the per-call arguments before protocol negotiation yields to the
+    // caller. A shallow copy would still share nested arrays such as
+    // finding_ids, so snapshot the JSON that tools/call will send.
+    const callArguments = JSON.parse(JSON.stringify(args)) as Record<
+      string,
+      unknown
+    >;
     const invoke = (
       body: object,
       phase: "initialize" | "notification" | "call",

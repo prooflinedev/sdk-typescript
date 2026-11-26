@@ -2419,6 +2419,65 @@ test("MCP helpers isolate per-call organizations and preserve refusals", async (
   assert.equal(calls.length, observed.length * 3);
 });
 
+test("MCP calls send the nested arguments they were called with", async (t) => {
+  const received = [];
+  const { baseUrl } = await server(t, (_, response, seen) => {
+    const body = JSON.parse(seen.at(-1).body);
+    if (body.method === "initialize")
+      return json(response, 200, {
+        jsonrpc: "2.0",
+        id: 1,
+        result: { protocolVersion: "2025-11-25" },
+      });
+    if (body.method === "notifications/initialized") {
+      response.writeHead(202);
+      return response.end();
+    }
+    received.push(body.params.arguments.finding_ids);
+    json(response, 200, { jsonrpc: "2.0", id: 2, result: { content: [] } });
+  });
+  const client = new ProoflineClient({ baseUrl, token });
+  const first = "00000000-0000-7000-8000-000000000011";
+  const second = "00000000-0000-7000-8000-000000000012";
+  const third = "00000000-0000-7000-8000-000000000013";
+  // A caller batching findings through one reused buffer clears or refills it
+  // while earlier calls are still negotiating MCP.
+  const batch = [];
+  const pending = [];
+  const send = () => {
+    pending.push(
+      client.fixes.requestReverification({
+        review_id: reviewId,
+        finding_ids: batch,
+        commit_sha: "a".repeat(40),
+      }),
+    );
+    batch.length = 0;
+  };
+  for (const id of [first, second, third]) {
+    batch.push(id);
+    if (batch.length === 2) send();
+  }
+  send();
+  // Replacing an element in place must not reach an in-flight call either.
+  const ids = [first];
+  pending.push(
+    client.fixes.requestReverification({
+      review_id: reviewId,
+      finding_ids: ids,
+      commit_sha: "a".repeat(40),
+    }),
+  );
+  ids[0] = third;
+  await Promise.all(pending);
+  // Concurrent calls may arrive in any order.
+  const sorted = (lists) => lists.map((ids) => JSON.stringify(ids)).sort();
+  assert.deepEqual(
+    sorted(received),
+    sorted([[first, second], [third], [first]]),
+  );
+});
+
 test("public MCP types accept existing and targeted calls", async (t) => {
   // Check consumer code against the built public declarations, including
   // object literals whose extra properties JavaScript HTTP tests cannot check.
