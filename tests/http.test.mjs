@@ -1819,6 +1819,208 @@ test("export pages follow cursors with the first call's filters, refusing cycles
   assert.equal(bounded.length, 2);
 });
 
+test("iterExportPages preserves the frozen horizon and version across pages", async (t) => {
+  const scenarios = {
+    "equivalent-spellings": [
+      {
+        settled: "2026-10-25T00:00:00Z",
+        version: "2",
+        rows: [{ dataset_version: 2, id: "1" }],
+        next: "p2",
+      },
+      {
+        settled: "2026-10-25T02:00:00+02:00",
+        version: "2",
+        rows: [{ dataset_version: 2, id: "2" }],
+        next: "p3",
+      },
+      {
+        settled: "2026-10-25T00:00:00.000000Z",
+        version: "2",
+        rows: [],
+        next: null,
+      },
+    ],
+    "equivalent-fraction": [
+      {
+        settled: "2026-10-25T00:00:00.5Z",
+        version: "2",
+        rows: [{ dataset_version: 2, id: "1" }],
+        next: "p2",
+      },
+      {
+        settled: "2026-10-25T00:00:00.500000Z",
+        version: "2",
+        rows: [{ dataset_version: 2, id: "2" }],
+        next: null,
+      },
+    ],
+    "populated-horizon-drift": [
+      {
+        settled: "2026-10-25T00:00:00Z",
+        version: "2",
+        rows: [{ dataset_version: 2, id: "1" }],
+        next: "p2",
+      },
+      {
+        settled: "2026-10-25T00:01:00Z",
+        version: "2",
+        rows: [{ dataset_version: 2, id: "2" }],
+        next: "p3",
+      },
+      {
+        settled: "2026-10-25T00:01:00Z",
+        version: "2",
+        rows: [{ dataset_version: 2, id: "3" }],
+        next: null,
+      },
+    ],
+    "empty-final-horizon-drift": [
+      {
+        settled: "2026-10-25T00:00:00Z",
+        version: "2",
+        rows: [{ dataset_version: 2, id: "1" }],
+        next: "p2",
+      },
+      {
+        settled: "2026-10-25T00:01:00Z",
+        version: "2",
+        rows: [],
+        next: null,
+      },
+    ],
+    "submillisecond-horizon-drift": [
+      {
+        settled: "2026-10-25T00:00:00.123456Z",
+        version: "2",
+        rows: [{ dataset_version: 2, id: "1" }],
+        next: "p2",
+      },
+      {
+        settled: "2026-10-25T00:00:00.123457Z",
+        version: "2",
+        rows: [{ dataset_version: 2, id: "2" }],
+        next: null,
+      },
+    ],
+    "version-drift": [
+      {
+        settled: "2026-10-25T00:00:00Z",
+        version: "2",
+        rows: [{ dataset_version: 2, id: "1" }],
+        next: "p2",
+      },
+      {
+        settled: "2026-10-25T00:00:00Z",
+        version: "1",
+        rows: [{ dataset_version: 1, id: "2" }],
+        next: null,
+      },
+    ],
+  };
+  let active = "equivalent-spellings";
+  let callIndex = 0;
+  const { baseUrl } = await server(t, (_, response) => {
+    const page = scenarios[active][callIndex++];
+    response.writeHead(200, {
+      "content-type": "application/x-ndjson",
+      "x-proofline-export-version": page.version,
+      "x-proofline-export-settled-until": page.settled,
+      ...(page.next ? { "x-proofline-export-next-cursor": page.next } : {}),
+    });
+    response.end(page.rows.map((row) => `${JSON.stringify(row)}\n`).join(""));
+  });
+  const client = new ProoflineClient({ baseUrl, token });
+  const parameters = {
+    path: { org_id: orgId, dataset: "findings" },
+    query: { from: "2026-10-01T00:00:00Z", to: "2026-10-25T00:00:00Z" },
+  };
+
+  const equivalent = [];
+  for await (const page of client.iterExportPages(parameters))
+    equivalent.push(page.settledUntil);
+  assert.deepEqual(equivalent, [
+    "2026-10-25T00:00:00Z",
+    "2026-10-25T02:00:00+02:00",
+    "2026-10-25T00:00:00.000000Z",
+  ]);
+
+  active = "equivalent-fraction";
+  callIndex = 0;
+  const fractional = [];
+  for await (const page of client.iterExportPages(parameters))
+    fractional.push(page.settledUntil);
+  assert.deepEqual(fractional, [
+    "2026-10-25T00:00:00.5Z",
+    "2026-10-25T00:00:00.500000Z",
+  ]);
+
+  for (const name of [
+    "populated-horizon-drift",
+    "empty-final-horizon-drift",
+    "submillisecond-horizon-drift",
+    "version-drift",
+  ]) {
+    active = name;
+    callIndex = 0;
+    const yielded = [];
+    await assert.rejects(
+      (async () => {
+        for await (const page of client.iterExportPages(parameters))
+          yielded.push(page);
+      })(),
+      (error) =>
+        error instanceof ProoflineError &&
+        error.type === "urn:proofline:sdk:invalid-pagination",
+    );
+    assert.equal(
+      yielded.length,
+      1,
+      `${name} must reject before yielding page 2`,
+    );
+  }
+});
+
+test("exportReviews requires valid RFC3339 settled horizons", async (t) => {
+  const headers = [
+    ["2024-02-29T23:59:59Z", true],
+    ["2026-10-25T00:00:00", false],
+    ["2026-10-25", false],
+    ["Oct 25, 2026", false],
+    ["2026-02-29T00:00:00Z", false],
+    ["2026-10-25T24:00:00Z", false],
+  ];
+  let index = 0;
+  const { baseUrl } = await server(t, (_, response) => {
+    const [settled] = headers[index++];
+    response.writeHead(200, {
+      "content-type": "application/x-ndjson",
+      "x-proofline-export-version": "1",
+      "x-proofline-export-settled-until": settled,
+    });
+    response.end('{"dataset_version":1}\n');
+  });
+  const client = new ProoflineClient({ baseUrl, token });
+  for (const [settled, valid] of headers) {
+    const req = client.exportReviews({
+      path: { org_id: orgId, dataset: "reviews" },
+      query: { from: "2026-10-01T00:00:00Z", to: "2026-10-25T00:00:00Z" },
+    });
+    if (valid) {
+      const page = await req;
+      assert.equal(page.settledUntil, settled);
+    } else {
+      await assert.rejects(
+        req,
+        (error) =>
+          error instanceof ProoflineError &&
+          error.type === "urn:proofline:sdk:invalid-response",
+        `${settled} must be rejected`,
+      );
+    }
+  }
+});
+
 test("export versions follow the dataset", async (t) => {
   const served = {
     findings: [

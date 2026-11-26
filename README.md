@@ -99,7 +99,7 @@ for await (const page of client.iterExportPages({
 }
 ```
 
-Set `query.cursor` to resume an export. Iteration stops only when a page has no next cursor, including after a page with no rows. An empty or repeated cursor throws `ProoflineError` with type `urn:proofline:sdk:invalid-pagination`, and the page that carries it is not yielded. The default bound is 100 pages; pass `{ maxPages }` with an integer from 1 to 1000. Running out of pages while a cursor remains throws `urn:proofline:sdk:pagination-limit`, so a partial export never looks complete.
+Set `query.cursor` to resume an export. Iteration stops only when a page has no next cursor, including after a page with no rows. An empty or repeated cursor, or a page whose `settledUntil` instant or dataset `version` differs from the first page, throws `ProoflineError` with type `urn:proofline:sdk:invalid-pagination`, and the page that carries it is not yielded. The default bound is 100 pages; pass `{ maxPages }` with an integer from 1 to 1000. Running out of pages while a cursor remains throws `urn:proofline:sdk:pagination-limit`, so a partial export never looks complete.
 
 ## MCP organization selection
 

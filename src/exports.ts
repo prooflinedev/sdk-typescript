@@ -19,6 +19,62 @@ const versions: Record<string, readonly string[]> = {
   finding_validations: ["1", "2"],
 };
 
+const RFC3339 =
+  /^(\d{4})-(\d{2})-(\d{2})[Tt](\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?(?:[Zz]|([+-])(\d{2}):(\d{2}))$/;
+
+const DAYS_IN_MONTH = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31] as const;
+
+export interface SettledHorizon {
+  seconds: bigint;
+  fraction: string;
+}
+
+function isLeapYear(year: number): boolean {
+  return (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
+}
+
+/** Parses an RFC 3339 timestamp with an explicit offset into an exact UTC instant. */
+export function parseSettledHorizon(value: string): SettledHorizon | null {
+  const match = RFC3339.exec(value);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+  const second = Number(match[6]);
+  const fraction = (match[7] ?? "").replace(/0+$/, "");
+  const sign = match[8];
+  const offsetHour = match[9] ? Number(match[9]) : 0;
+  const offsetMinute = match[10] ? Number(match[10]) : 0;
+  if (month < 1 || month > 12) return null;
+  const maxDay =
+    month === 2 && isLeapYear(year) ? 29 : (DAYS_IN_MONTH[month - 1] ?? 0);
+  if (
+    day < 1 ||
+    day > maxDay ||
+    hour > 23 ||
+    minute > 59 ||
+    second > 59 ||
+    offsetHour > 23 ||
+    offsetMinute > 59
+  ) {
+    return null;
+  }
+  const utc = new Date(0);
+  utc.setUTCFullYear(year, month - 1, day);
+  utc.setUTCHours(hour, minute, second, 0);
+  const offsetSeconds =
+    (sign === "-" ? -1 : 1) * (offsetHour * 3600 + offsetMinute * 60);
+  const seconds =
+    BigInt(Math.trunc(utc.getTime() / 1000)) - BigInt(offsetSeconds);
+  return { seconds, fraction };
+}
+
+export function sameHorizon(a: SettledHorizon, b: SettledHorizon): boolean {
+  return a.seconds === b.seconds && a.fraction === b.fraction;
+}
+
 function invalid(): never {
   throw new ProoflineError(
     200,
@@ -83,7 +139,7 @@ export function decodeExport(
     headers.get("content-type")?.split(";")[0]?.trim() !== media ||
     !(versions[dataset] ?? ["1"]).includes(version) ||
     !settledUntil ||
-    !Number.isFinite(Date.parse(settledUntil))
+    parseSettledHorizon(settledUntil) === null
   )
     invalid();
   let rows: Record<string, unknown>[];
