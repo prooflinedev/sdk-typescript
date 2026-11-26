@@ -400,8 +400,23 @@ function httpDate(value: string): number {
     : Number.NaN;
 }
 
-export function sleep(milliseconds: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+export function sleep(
+  milliseconds: number,
+  signal?: AbortSignal,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    signal?.throwIfAborted();
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(signal?.reason);
+    };
+    const timer = setTimeout(() => {
+      // A caller's signal can outlive many sleeps, so each one detaches itself.
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, milliseconds);
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
 }
 
 export class Transport {
@@ -437,6 +452,7 @@ export class Transport {
       JSON.parse(text),
     accept = "application/json, application/problem+json",
     mcpPhase?: "initialize" | "notification" | "call",
+    signal?: AbortSignal,
   ): Promise<T> {
     const path = Object.entries(parameters.path ?? {}).reduce(
       (value, [key, coordinateValue]) =>
@@ -479,7 +495,10 @@ export class Transport {
           "the request deadline expired",
         );
       const requestDeadline = now + remaining;
-      const signal = AbortSignal.timeout(Math.ceil(remaining));
+      const timeout = AbortSignal.timeout(Math.ceil(remaining));
+      const requestSignal = signal
+        ? AbortSignal.any([signal, timeout])
+        : timeout;
       let response: Response;
       try {
         response = await fetch(url, {
@@ -488,10 +507,10 @@ export class Transport {
           ...(requestBody === undefined ? {} : { body: requestBody }),
           redirect: "manual",
           credentials: "omit",
-          signal,
+          signal: requestSignal,
         });
       } catch {
-        if (signal.aborted && waitTimeout)
+        if (timeout.aborted && waitTimeout)
           throw new ProoflineError(
             0,
             "urn:proofline:sdk:timeout",
@@ -524,7 +543,7 @@ export class Transport {
       const value = await decoded(
         response,
         requestDeadline,
-        signal,
+        timeout,
         waitTimeout,
         decode,
       );
@@ -545,7 +564,7 @@ export class Transport {
           "the review timeout expires before the server permits a retry",
         );
       }
-      await sleep(delay);
+      await sleep(delay, signal);
     }
   }
 }
