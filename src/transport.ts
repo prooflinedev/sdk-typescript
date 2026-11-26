@@ -400,8 +400,26 @@ function httpDate(value: string): number {
     : Number.NaN;
 }
 
-export function sleep(milliseconds: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+/** Rejects with the signal's reason, and clears its timer, when the signal aborts. */
+export function sleep(
+  milliseconds: number,
+  signal?: AbortSignal,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(signal.reason);
+      return;
+    }
+    const aborted = () => {
+      clearTimeout(timer);
+      reject(signal?.reason);
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", aborted);
+      resolve();
+    }, milliseconds);
+    signal?.addEventListener("abort", aborted, { once: true });
+  });
 }
 
 export class Transport {
@@ -437,6 +455,7 @@ export class Transport {
       JSON.parse(text),
     accept = "application/json, application/problem+json",
     mcpPhase?: "initialize" | "notification" | "call",
+    cancel?: AbortSignal,
   ): Promise<T> {
     const path = Object.entries(parameters.path ?? {}).reduce(
       (value, [key, coordinateValue]) =>
@@ -454,6 +473,7 @@ export class Transport {
     if (mcpPhase && new TextEncoder().encode(requestBody).length > 8192)
       throw new TypeError("MCP request exceeds 8192 bytes");
     for (let attempt = 0; ; attempt += 1) {
+      cancel?.throwIfAborted();
       const headers = new Headers({
         Accept: accept,
         "User-Agent": `proofline-typescript/${VERSION}`,
@@ -479,7 +499,11 @@ export class Transport {
           "the request deadline expired",
         );
       const requestDeadline = now + remaining;
-      const signal = AbortSignal.timeout(Math.ceil(remaining));
+      const timeoutSignal = AbortSignal.timeout(Math.ceil(remaining));
+      const signal =
+        cancel === undefined
+          ? timeoutSignal
+          : AbortSignal.any([timeoutSignal, cancel]);
       let response: Response;
       try {
         response = await fetch(url, {
@@ -491,6 +515,8 @@ export class Transport {
           signal,
         });
       } catch {
+        // A caller's cancellation is not a transport fault or a wait timeout.
+        cancel?.throwIfAborted();
         if (signal.aborted && waitTimeout)
           throw new ProoflineError(
             0,
@@ -521,13 +547,19 @@ export class Transport {
         }
         if (notification && !response.body) return undefined as T;
       }
-      const value = await decoded(
-        response,
-        requestDeadline,
-        signal,
-        waitTimeout,
-        decode,
-      );
+      let value: unknown;
+      try {
+        value = await decoded(
+          response,
+          requestDeadline,
+          signal,
+          waitTimeout,
+          decode,
+        );
+      } catch (error) {
+        cancel?.throwIfAborted();
+        throw error;
+      }
       if (response.ok) return value as T;
       const error = problem(response.status, value, this.#token);
       const delay = retryDelay(response.headers.get("Retry-After"), attempt);
@@ -545,7 +577,7 @@ export class Transport {
           "the review timeout expires before the server permits a retry",
         );
       }
-      await sleep(delay);
+      await sleep(delay, cancel);
     }
   }
 }

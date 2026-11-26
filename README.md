@@ -38,6 +38,27 @@ try {
 }
 ```
 
+## Waiting for a review
+
+`waitForReview` polls a review until it reaches a final state and returns its `status`, `reviewUrl`, `review`, and any assessment `gaps`. It waits at most `timeoutMs`, 20 minutes by default, and returns `TIMED_OUT` with the last review it read when that passes.
+
+To stop waiting earlier, pass an `AbortSignal`. Aborting ends the in-flight request, a server-requested retry delay, or the poll interval at once, and the call rejects with the signal's `reason`, a `DOMException` named `AbortError` unless you supply your own. No request is sent after the abort, and an already-aborted signal sends nothing. Aborting only stops the client from waiting. To stop the review itself, call `stopReview`.
+
+```typescript
+const controller = new AbortController();
+process.once("SIGINT", () => controller.abort());
+
+try {
+  const result = await client.waitForReview(organizationId, reviewId, {
+    signal: controller.signal,
+  });
+  console.log(result.status, result.reviewUrl);
+} catch (error) {
+  if (!controller.signal.aborted) throw error;
+  console.error("Stopped waiting; the review continues on Proofline.");
+}
+```
+
 ## Coverage uploads
 
 Upload CI coverage reports with a repository-restricted token that holds `coverage:write`. The token holder must have current GitHub write access to that repository. Set `PROOFLINE_TOKEN` to that token and pass the full commit SHA that the tests ran on. The server refuses branch names and abbreviated SHAs.
