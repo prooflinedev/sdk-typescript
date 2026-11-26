@@ -2479,3 +2479,70 @@ export async function use(client: ProoflineClient): Promise<void> {
     fixture,
   ]);
 });
+
+test("network failures preserve error.cause and distinguish immediate connection failures from timeouts without exposing secrets", async (t) => {
+  const deadServer = createServer();
+  deadServer.listen(0, "127.0.0.1");
+  await once(deadServer, "listening");
+  const deadPort = deadServer.address().port;
+  await new Promise((resolve) => deadServer.close(resolve));
+
+  const client = new ProoflineClient({
+    baseUrl: `http://127.0.0.1:${deadPort}`,
+    token,
+    requestTimeoutMs: 5_000,
+  });
+
+  await assert.rejects(
+    client.getReview({ path: { org_id: orgId, review_id: reviewId } }),
+    (error) => {
+      assert(error instanceof ProoflineError);
+      assert.equal(error.status, 0);
+      assert.equal(error.type, "urn:proofline:sdk:transport");
+      assert.equal(
+        error.detail,
+        "the request failed before receiving a response",
+      );
+      assert(error.cause instanceof Error);
+      const code = error.cause.code ?? error.cause.cause?.code;
+      if (code) assert.equal(code, "ECONNREFUSED");
+      assert(!error.message.includes(token));
+      assert(!error.detail.includes(token));
+      return true;
+    },
+  );
+
+  const hangingServer = createServer(() => {});
+  hangingServer.listen(0, "127.0.0.1");
+  await once(hangingServer, "listening");
+  t.after(() => new Promise((resolve) => hangingServer.close(resolve)));
+
+  const timeoutClient = new ProoflineClient({
+    baseUrl: `http://127.0.0.1:${hangingServer.address().port}`,
+    token,
+    requestTimeoutMs: 50,
+  });
+
+  await assert.rejects(
+    timeoutClient.getReview({ path: { org_id: orgId, review_id: reviewId } }),
+    (error) => {
+      assert(error instanceof ProoflineError);
+      assert.equal(error.status, 0);
+      assert.equal(error.type, "urn:proofline:sdk:transport");
+      assert.equal(
+        error.detail,
+        "the request did not receive a response within its timeout",
+      );
+      assert(error.cause instanceof Error);
+      assert.equal(error.cause.name, "TimeoutError");
+      assert.deepEqual(JSON.parse(JSON.stringify(error)), { status: 0 });
+      assert.equal(
+        inspect(error),
+        "ProoflineError: Proofline request failed with status 0",
+      );
+      assert(!inspect(error).includes(token));
+      assert(!JSON.stringify(error).includes(token));
+      return true;
+    },
+  );
+});
