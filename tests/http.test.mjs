@@ -21,6 +21,13 @@ import contract from "../openapi.public.json" with { type: "json" };
 import metadata from "../package.json" with { type: "json" };
 
 const orgId = "00000000-0000-7000-8000-000000000001";
+function runPnpm(args, options) {
+  if (process.platform === "win32") {
+    execFileSync("cmd.exe", ["/d", "/s", "/c", "pnpm", ...args], options);
+  } else {
+    execFileSync("pnpm", args, options);
+  }
+}
 const reviewId = "00000000-0000-7000-8000-000000000002";
 const assessmentId = "00000000-0000-7000-8000-000000000003";
 const repoId = "00000000-0000-7000-8000-000000000004";
@@ -361,6 +368,7 @@ test("coverage uploads preserve the tested commit, report text and server refusa
 test("coverage file uploads send report text as written under relative names", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "proofline-coverage-"));
   t.after(() => rm(root, { recursive: true, force: true }));
+
   const lcov = "﻿SF:src/app.ts\r\nDA:1,1\r\nend_of_record\r\n";
   const go = "mode: set\nexample/main.go:1.1,1.2 1 0\n";
   await writeFile(join(root, "lcov.info"), lcov);
@@ -403,6 +411,16 @@ test("coverage file uploads send report text as written under relative names", a
 test("coverage file uploads refuse locally what the server would refuse", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "proofline-coverage-"));
   t.after(() => rm(root, { recursive: true, force: true }));
+  const outsideRoot = await mkdtemp(join(tmpdir(), "proofline-outside-"));
+  t.after(() => rm(outsideRoot, { recursive: true, force: true }));
+  const outsidePath = join(outsideRoot, "outside.info");
+  await writeFile(outsidePath, "outside report");
+  const symlinkPath = join(root, "linked.info");
+  await symlink(
+    outsideRoot,
+    symlinkPath,
+    process.platform === "win32" ? "junction" : "dir",
+  );
   await writeFile(join(root, "lcov.info"), "SF:a.ts\nend_of_record\n");
   await writeFile(join(root, "report.gz"), Buffer.from([0x1f, 0x8b, 0xff]));
   await writeFile(join(root, "huge.info"), "");
@@ -419,16 +437,24 @@ test("coverage file uploads refuse locally what the server would refuse", async 
     [{ tested_sha: sha, files: [] }, /1 to 50/],
     [{ tested_sha: sha, files: Array(51).fill("lcov.info") }, /1 to 50/],
     [
-      { tested_sha: sha, files: ["lcov.info", { path: "lcov.info" }] },
-      /unique/,
-    ],
-    [
-      { tested_sha: sha, files: [join(tmpdir(), "outside.info")] },
+      {
+        tested_sha: sha,
+        files: [{ path: outsidePath, name: "safe.info" }],
+      },
       /inside root/,
     ],
+    [
+      { tested_sha: sha, files: [{ path: "linked.info", name: "safe.info" }] },
+      /inside root/,
+    ],
+
     [
       { tested_sha: sha, files: [{ path: "lcov.info", name: "/abs.info" }] },
       /inside root/,
+    ],
+    [
+      { tested_sha: sha, files: ["lcov.info", { path: "lcov.info" }] },
+      /unique/,
     ],
     [
       { tested_sha: sha, files: [{ path: "lcov.info", name: "a/../b.info" }] },
@@ -2063,14 +2089,15 @@ test("a new public operation generates a callable typed client method", async (t
   const root = fileURLToPath(new URL("../", import.meta.url));
   const work = await mkdtemp(join(tmpdir(), "sdk-operation-"));
   t.after(() => rm(work, { recursive: true, force: true }));
-  for (const name of ["src", "generate.mjs", "package.json", "tsconfig.json"]) {
+  for (const name of [
+    "src",
+    "generate.mjs",
+    "package.json",
+    "pnpm-lock.yaml",
+    "tsconfig.json",
+  ]) {
     await cp(join(root, name), join(work, name), { recursive: true });
   }
-  await symlink(
-    join(root, "node_modules"),
-    join(work, "node_modules"),
-    "junction",
-  );
   const spec = JSON.parse(
     await readFile(join(root, "openapi.public.json"), "utf8"),
   );
@@ -2098,7 +2125,8 @@ test("a new public operation generates a callable typed client method", async (t
     },
   };
   await writeFile(join(work, "openapi.public.json"), JSON.stringify(spec));
-  execFileSync("pnpm", ["run", "generate"], { cwd: work });
+  runPnpm(["install", "--offline"], { cwd: work });
+  runPnpm(["run", "generate"], { cwd: work });
   await writeFile(
     join(work, "src", "example-check.ts"),
     `import type { ProoflineClient } from "./index.js";
@@ -2106,7 +2134,7 @@ export async function answer(client: ProoflineClient): Promise<string> {
   return (await client.readExample({ path: { item: 7 } })).answer;
 }`,
   );
-  execFileSync("pnpm", ["run", "build"], { cwd: work });
+  runPnpm(["run", "build"], { cwd: work });
   const built = await import(
     pathToFileURL(join(work, "dist", "index.js")).href
   );
