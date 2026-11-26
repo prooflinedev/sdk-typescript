@@ -38,6 +38,23 @@ try {
 }
 ```
 
+## Wait for a review
+
+`waitForReview` polls until a review reaches a terminal state or the timeout expires. Its optional `onProgress` callback receives each validated review snapshot, including the terminal snapshot. The callback runs synchronously; if it throws, `waitForReview` rejects with that error. Callback snapshots are detached from the returned result.
+
+```typescript
+const outcome = await client.waitForReview(organizationId, reviewId, {
+  timeoutMs: 5 * 60_000,
+  onProgress(review) {
+    console.log(`Review status: ${review.status}`);
+  },
+});
+
+if (outcome.status === "TIMED_OUT") {
+  console.log(`Review is still running: ${outcome.reviewUrl}`);
+}
+```
+
 ## Coverage uploads
 
 Upload CI coverage reports with a repository-restricted token that holds `coverage:write`. The token holder must have current GitHub write access to that repository. Set `PROOFLINE_TOKEN` to that token and pass the full commit SHA that the tests ran on. The server refuses branch names and abbreviated SHAs.

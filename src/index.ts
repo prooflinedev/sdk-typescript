@@ -75,6 +75,8 @@ export interface ReviewOutcome {
 
 export interface WaitOptions {
   timeoutMs?: number;
+  /** Called with each validated review response, including the terminal one. */
+  onProgress?: (review: Readonly<Review>) => void;
 }
 
 export class ProoflineClient extends Operations {
@@ -264,6 +266,8 @@ export class ProoflineClient extends Operations {
       }
       validateReview(review, reviewId);
       const status = terminal(review);
+      // Keep callback changes isolated from the snapshot used to build the result.
+      options.onProgress?.(structuredClone(review));
       if (status !== null)
         return outcome(
           status,
