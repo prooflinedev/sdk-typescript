@@ -1564,6 +1564,39 @@ test("pagination keeps filters and refuses cycles, incomplete metadata and resou
   );
 });
 
+test("review pagination rejects a cycle back to its initial cursor before refetching it", async (t) => {
+  const requestedCursors = [];
+  const fixture = await server(t, (request, response) => {
+    const cursor = new URL(request.url, "http://127.0.0.1").searchParams.get(
+      "cursor",
+    );
+    requestedCursors.push(cursor);
+    const next = cursor === "start" ? "next" : "start";
+    return json(response, 200, {
+      items: [{ id: cursor }],
+      truncated: true,
+      next_cursor: next,
+      filters: { repositories: [], environments: [], authors: [] },
+    });
+  });
+  const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
+  const yielded = [];
+  await assert.rejects(
+    (async () => {
+      for await (const item of client.iterReviews({
+        path: { org_id: orgId },
+        query: { cursor: "start" },
+      }))
+        yielded.push(item.id);
+    })(),
+    (error) =>
+      error instanceof ProoflineError &&
+      error.type === "urn:proofline:sdk:invalid-response",
+  );
+  assert.deepEqual(yielded, ["start", "next"]);
+  assert.deepEqual(requestedCursors, ["start", "next"]);
+});
+
 test("credentials remain on the configured origin and malformed responses carry no raw body", async (t) => {
   for (const baseUrl of [
     "http://customer.example",
