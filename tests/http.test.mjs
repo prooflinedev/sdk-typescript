@@ -1948,6 +1948,300 @@ console.log(kinds);
   ]);
 });
 
+test(
+  "MCP request responses accept SSE frames and finish before the stream closes",
+  async (t) => {
+    const { baseUrl, calls } = await server(t, (request, response, seen) => {
+      const body = JSON.parse(seen.at(-1).body);
+      assert.equal(
+        request.headers.accept,
+        "application/json, text/event-stream",
+      );
+      if (body.method === "notifications/initialized") {
+        response.writeHead(202);
+        return response.end();
+      }
+      response.writeHead(200, {
+        "Content-Type": "TEXT/EVENT-STREAM   ; charset=utf-8",
+      });
+      response.write(": keep-alive\r\n\r\nid: prime\r\ndata:\r\n\r\n");
+      const notification = {
+        jsonrpc: "2.0",
+        method: "notifications/progress",
+        params: { progress: 1 },
+      };
+      response.write(`data: ${JSON.stringify(notification)}\r\n\r\n`);
+      const message =
+        body.method === "initialize"
+          ? {
+              jsonrpc: "2.0",
+              id: 1,
+              result: { protocolVersion: "2025-11-25" },
+            }
+          : {
+              jsonrpc: "2.0",
+              id: 2,
+              result: { content: [{ type: "text", text: "ok" }] },
+            };
+      response.write(
+        JSON.stringify(message, null, 2)
+          .split("\n")
+          .map((line) => `data: ${line}`)
+          .join("\r\n") + "\r\n\r\n",
+      );
+    });
+    const client = new ProoflineClient({
+      baseUrl,
+      token,
+      requestTimeoutMs: 1_000,
+    });
+    assert.deepEqual(
+      await client.knowledge.askCodebase({
+        repository: "owner/name",
+        question: "status?",
+      }),
+      { content: [{ type: "text", text: "ok" }] },
+    );
+    assert.equal(calls.length, 3);
+  },
+);
+
+test("MCP SSE matching response cancels the still-open reader", async (t) => {
+  const originalFetch = globalThis.fetch;
+  let cancelled = 0;
+  globalThis.fetch = async (_url, init) => {
+    const body = JSON.parse(init.body);
+    if (body.method === "notifications/initialized")
+      return new Response(null, { status: 202 });
+    if (body.method === "initialize")
+      return Response.json({
+        jsonrpc: "2.0",
+        id: 1,
+        result: { protocolVersion: "2025-11-25" },
+      });
+    return new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(
+            new TextEncoder().encode(
+              'data: {"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"ok"}]}}\n\n',
+            ),
+          );
+        },
+        cancel() {
+          cancelled += 1;
+        },
+      }),
+      { status: 200, headers: { "Content-Type": "text/event-stream" } },
+    );
+  };
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  const client = new ProoflineClient({ baseUrl: "http://127.0.0.1", token });
+  assert.deepEqual(
+    await client.knowledge.askCodebase({
+      repository: "owner/name",
+      question: "status?",
+    }),
+    { content: [{ type: "text", text: "ok" }] },
+  );
+  assert.equal(cancelled, 1);
+});
+
+test("MCP JSON responses normalize Content-Type values", async (t) => {
+  const { baseUrl } = await server(t, (_request, response, seen) => {
+    const body = JSON.parse(seen.at(-1).body);
+    if (body.method === "notifications/initialized") {
+      response.writeHead(202);
+      return response.end();
+    }
+    json(
+      response,
+      200,
+      body.method === "initialize"
+        ? {
+            jsonrpc: "2.0",
+            id: 1,
+            result: { protocolVersion: "2025-11-25" },
+          }
+        : {
+            jsonrpc: "2.0",
+            id: 2,
+            result: { content: [{ type: "text", text: "ok" }] },
+          },
+      { "Content-Type": "Application/JSON   ; Charset=UTF-8" },
+    );
+  });
+  const client = new ProoflineClient({ baseUrl, token });
+  assert.deepEqual(
+    await client.knowledge.askCodebase({
+      repository: "owner/name",
+      question: "status?",
+    }),
+    { content: [{ type: "text", text: "ok" }] },
+  );
+});
+
+test("MCP SSE parse and UTF-8 failures cancel without masking errors", async (t) => {
+  const originalFetch = globalThis.fetch;
+  let cancelled = 0;
+  let payload;
+  globalThis.fetch = async (_url, init) => {
+    const body = JSON.parse(init.body);
+    if (body.method === "notifications/initialized")
+      return new Response(null, { status: 202 });
+    if (body.method === "initialize")
+      return Response.json({
+        jsonrpc: "2.0",
+        id: 1,
+        result: { protocolVersion: "2025-11-25" },
+      });
+    return new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(payload);
+        },
+        cancel() {
+          cancelled += 1;
+          throw new Error("cancellation failed");
+        },
+      }),
+      { status: 200, headers: { "Content-Type": "text/event-stream" } },
+    );
+  };
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  const client = new ProoflineClient({ baseUrl: "http://127.0.0.1", token });
+  for (const [bytes, type, detail] of [
+    [
+      new TextEncoder().encode("data: not-json\n\n"),
+      "urn:proofline:sdk:mcp",
+      "Invalid or refused MCP response",
+    ],
+    [
+      new Uint8Array([0xff]),
+      "urn:proofline:sdk:invalid-response",
+      "the response is not valid UTF-8 JSON",
+    ],
+  ]) {
+    payload = bytes;
+    cancelled = 0;
+    await assert.rejects(
+      client.knowledge.askCodebase({
+        repository: "owner/name",
+        question: "status?",
+      }),
+      (error) =>
+        error instanceof ProoflineError &&
+        error.type === type &&
+        error.detail === detail &&
+        !error.detail.includes("cancellation failed"),
+    );
+    assert.equal(cancelled, 1);
+  }
+});
+
+test("MCP SSE server requests fail with an actionable unsupported error", async (t) => {
+  const { baseUrl } = await server(t, (_request, response, seen) => {
+    const body = JSON.parse(seen.at(-1).body);
+    if (body.method === "initialize")
+      return json(response, 200, {
+        jsonrpc: "2.0",
+        id: 1,
+        result: { protocolVersion: "2025-11-25" },
+      });
+    if (body.method === "notifications/initialized") {
+      response.writeHead(202);
+      return response.end();
+    }
+    response.writeHead(200, { "Content-Type": "text/event-stream" });
+    const request = {
+      jsonrpc: "2.0",
+      id: "server-1",
+      method: "sampling/createMessage",
+    };
+    response.end(`data: ${JSON.stringify(request)}\n\n`);
+  });
+  const client = new ProoflineClient({ baseUrl, token });
+  await assert.rejects(
+    client.knowledge.askCodebase({
+      repository: "owner/name",
+      question: "status?",
+    }),
+    (error) =>
+      error instanceof ProoflineError &&
+      error.type === "urn:proofline:sdk:mcp" &&
+      error.detail.includes("cannot handle MCP server-initiated requests") &&
+      error.detail.includes("server request handlers"),
+  );
+});
+
+test(
+  "MCP SSE responses reject a missing or mismatched request response",
+  async (t) => {
+    for (const event of [
+      "data: {\"jsonrpc\":\"2.0\",\"id\":99,\"result\":{}}\n\n",
+      "data: not-json\n\n",
+      ": keep-alive\n\n",
+    ]) {
+      const { baseUrl } = await server(t, (_request, response, seen) => {
+        const body = JSON.parse(seen.at(-1).body);
+        if (body.method === "notifications/initialized") {
+          response.writeHead(202);
+          return response.end();
+        }
+        response.writeHead(200, { "Content-Type": "text/event-stream" });
+        response.end(
+          body.method === "initialize"
+            ? 'data: {"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25"}}\n\n'
+            : event,
+        );
+      });
+      const client = new ProoflineClient({ baseUrl, token });
+      await assert.rejects(
+        client.knowledge.askCodebase({
+          repository: "owner/name",
+          question: "status?",
+        }),
+        (error) =>
+          error instanceof ProoflineError &&
+          error.type === "urn:proofline:sdk:mcp",
+      );
+    }
+  },
+);
+
+test(
+  "MCP HTTP refusals keep their status when their body is not an SSE success",
+  async (t) => {
+    const { baseUrl } = await server(t, (_request, response, seen) => {
+      const body = JSON.parse(seen.at(-1).body);
+      if (body.method === "initialize")
+        return json(response, 200, {
+          jsonrpc: "2.0",
+          id: 1,
+          result: { protocolVersion: "2025-11-25" },
+        });
+      if (body.method === "notifications/initialized") {
+        response.writeHead(202);
+        return response.end();
+      }
+      response.writeHead(503, { "Content-Type": "text/event-stream" });
+      response.end("temporarily unavailable");
+    });
+    const client = new ProoflineClient({ baseUrl, token });
+    await assert.rejects(
+      client.knowledge.askCodebase({
+        repository: "owner/name",
+        question: "status?",
+      }),
+      (error) => error instanceof ProoflineError && error.status === 503,
+    );
+  },
+);
+
 test("knowledge negotiates MCP and preserves scoped refusals without retry", async (t) => {
   let refusal = false;
   let wrongId = false;
