@@ -18,6 +18,9 @@ import {
   decodeExport,
   type ExportPage,
   type ExportParameters,
+  parseSettledHorizon,
+  type SettledHorizon,
+  sameHorizon,
 } from "./exports.js";
 
 export type { ExportPage, ExportParameters } from "./exports.js";
@@ -112,8 +115,9 @@ export class ProoflineClient extends Operations {
 
   /**
    * Follows an export's cursors, sending each page with the first call's dataset, window,
-   * format and grouping. A repeated cursor raises `urn:proofline:sdk:invalid-pagination`;
-   * a cursor left after `maxPages` (default 100, at most 1,000) raises
+   * format and grouping. A repeated cursor or a page that changes the frozen `settledUntil`
+   * instant or dataset `version` throws `urn:proofline:sdk:invalid-pagination`;
+   * a cursor left after `maxPages` (default 100, at most 1,000) throws
    * `urn:proofline:sdk:pagination-limit`.
    */
   async *iterExportPages(
@@ -128,12 +132,34 @@ export class ProoflineClient extends Operations {
     const query = { ...parameters.query };
     let cursor = query.cursor ?? null;
     const seen = new Set<string>(cursor === null ? [] : [cursor]);
+    let expectedHorizon: SettledHorizon | undefined;
+    let expectedVersion: 1 | 2 | undefined;
     for (let index = 0; index < maxPages; index += 1) {
       const page = await this.exportReviews({
         ...parameters,
         path,
         query: { ...query, cursor },
       });
+      const horizon = parseSettledHorizon(page.settledUntil);
+      if (horizon === null)
+        throw new ProoflineError(
+          0,
+          "urn:proofline:sdk:invalid-pagination",
+          "the export page has an invalid settled horizon",
+        );
+      if (expectedHorizon === undefined) {
+        expectedHorizon = horizon;
+        expectedVersion = page.version;
+      } else if (
+        !sameHorizon(expectedHorizon, horizon) ||
+        expectedVersion !== page.version
+      ) {
+        throw new ProoflineError(
+          0,
+          "urn:proofline:sdk:invalid-pagination",
+          "the export page changed its settled horizon or dataset version",
+        );
+      }
       if (page.nextCursor === null) {
         yield page;
         return;
