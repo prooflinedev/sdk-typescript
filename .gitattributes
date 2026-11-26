@@ -1,0 +1,3 @@
+# Check out text files with LF on every OS, so Biome (which formats with LF)
+# sees the same files on Windows as in CI.
+* text=auto eol=lf
