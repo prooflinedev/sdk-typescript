@@ -12,6 +12,14 @@ export type { McpTarget } from "./mcp.js";
 
 import { KnowledgeClient } from "./knowledge.js";
 
+export type {
+  CommitDeploy,
+  DeployCheckpoint,
+  DeployReading,
+  DeployVerdict,
+  DeployVerdictOptions,
+} from "./deploys.js";
+export { judgeDeployVerifications } from "./deploys.js";
 export type { KnowledgeResult, RepositoryKnowledge } from "./knowledge.js";
 
 import {
