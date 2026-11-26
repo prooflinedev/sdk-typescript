@@ -1507,6 +1507,227 @@ test("the wait timeout includes an in-flight request and returns the retained re
   }
 });
 
+test("review waits survive bounded transient read failures after an initial read", async (t) => {
+  const realSetTimeout = globalThis.setTimeout;
+  const delays = [];
+  let onSleep = null;
+  // waitForReview backoff starts at 5_000 ms; filtering on >= 5_000 avoids
+  // collapsing shorter internal timers while still catching every wait sleep.
+  t.mock.method(globalThis, "setTimeout", (fn, delay, ...args) => {
+    if (typeof delay === "number" && delay >= 5_000) {
+      delays.push(delay);
+      onSleep?.(delay);
+      return realSetTimeout(fn, 0, ...args);
+    }
+    return realSetTimeout(fn, delay, ...args);
+  });
+
+  // Survives 4 consecutive transient failures (gateway HTML 502, dropped socket,
+  // exhausted 503, empty 504), resets on a successful RUNNING poll, survives 4
+  // more, and returns COMPLETED.
+  await t.test(
+    "recovers across resettable streaks of 5xx and transport errors",
+    async (t) => {
+      let retries503 = 0;
+      const responses = [
+        (res) => json(res, 200, review("RUNNING")),
+        (res) => {
+          res.writeHead(502, { "Content-Type": "text/html" });
+          res.end("<html><body>Bad Gateway</body></html>");
+        },
+        (res) => res.destroy(),
+        (res) => {
+          res.writeHead(503, { "Retry-After": "0" });
+          res.end();
+        },
+        (res) => {
+          res.writeHead(504);
+          res.end();
+        },
+        (res) => json(res, 200, review("RUNNING")),
+        (res) => res.destroy(),
+        (res) =>
+          json(res, 502, { title: "bad gateway", detail: "upstream blip" }),
+        (res) => res.destroy(),
+        (res) =>
+          json(res, 500, { title: "server error", detail: "transient error" }),
+        (res) => json(res, 200, review("COMPLETED")),
+      ];
+      let index = 0;
+      const fixture = await server(t, (_, response) => {
+        if (index === 3) {
+          retries503 += 1;
+          responses[3](response);
+          // Transport retries 503 up to 3 times (4 total attempts) per poll.
+          if (retries503 === 4) index += 1;
+          return;
+        }
+        responses[index++](response);
+      });
+      delays.length = 0;
+      const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
+      const result = await client.waitForReview(orgId, reviewId);
+      assert.equal(result.status, "COMPLETED");
+      assert.equal(retries503, 4);
+      assert.equal(fixture.calls.length, responses.length + 3);
+      assert.deepEqual(
+        delays,
+        [
+          5_000, 10_000, 20_000, 40_000, 60_000, 60_000, 60_000, 60_000, 60_000,
+          60_000,
+        ],
+      );
+    },
+  );
+
+  // Five consecutive transient failures rethrow the fifth error.
+  for (const kind of ["502", "transport"]) {
+    await t.test(
+      `rethrows on the fifth consecutive ${kind} failure`,
+      async (t) => {
+        const fixture = await server(t, (_, response, calls) => {
+          if (calls.length === 1) return json(response, 200, review("RUNNING"));
+          if (kind === "transport") return response.destroy();
+          json(response, 502, {
+            title: "bad gateway",
+            detail: `failure ${calls.length - 1}`,
+          });
+        });
+        const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
+        await assert.rejects(
+          client.waitForReview(orgId, reviewId),
+          (error) =>
+            error instanceof ProoflineError &&
+            (kind === "transport"
+              ? error.status === 0 &&
+                error.type === "urn:proofline:sdk:transport"
+              : error.status === 502 && error.detail === "failure 5"),
+        );
+        assert.equal(fixture.calls.length, 6);
+      },
+    );
+  }
+
+  // First-read 5xx, mid-wait 4xx (including exhausted 429), and invalid responses still throw at once.
+  await t.test(
+    "fails immediately on initial 5xx, mid-wait 4xx, and invalid responses",
+    async (t) => {
+      let scenario = "first-502";
+      const fixture = await server(t, (_, response, calls) => {
+        if (scenario === "first-502")
+          return json(response, 502, { title: "bad gateway", detail: "down" });
+        if (calls.length === 1) return json(response, 200, review("RUNNING"));
+        if (scenario === "mid-403")
+          return json(response, 403, { title: "forbidden", detail: "revoked" });
+        if (scenario === "mid-429")
+          return json(
+            response,
+            429,
+            { title: "rate limited", detail: "slow down" },
+            { "Retry-After": "0" },
+          );
+        if (scenario === "mid-invalid-json") {
+          response.writeHead(200, { "Content-Type": "application/json" });
+          return response.end("not-json");
+        }
+        return json(response, 200, {
+          id: "wrong-review-id",
+          status: "RUNNING",
+        });
+      });
+      const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
+
+      await assert.rejects(
+        client.waitForReview(orgId, reviewId),
+        (error) => error instanceof ProoflineError && error.status === 502,
+      );
+      assert.equal(fixture.calls.length, 1);
+
+      for (const [nextScenario, expectedCalls, check] of [
+        ["mid-403", 2, (error) => error.status === 403],
+        ["mid-429", 5, (error) => error.status === 429],
+        [
+          "mid-invalid-json",
+          2,
+          (error) =>
+            error.status === 200 &&
+            error.type === "urn:proofline:sdk:invalid-response",
+        ],
+        [
+          "mid-invalid-shape",
+          2,
+          (error) =>
+            error.status === 0 &&
+            error.type === "urn:proofline:sdk:invalid-response",
+        ],
+      ]) {
+        scenario = nextScenario;
+        fixture.calls.length = 0;
+        await assert.rejects(
+          client.waitForReview(orgId, reviewId),
+          (error) => error instanceof ProoflineError && check(error),
+        );
+        assert.equal(fixture.calls.length, expectedCalls);
+      }
+    },
+  );
+
+  // Deadline expiry during transient failures returns TIMED_OUT with the retained review,
+  // including when a fifth consecutive 5xx arrives at or after the deadline.
+  await t.test(
+    "returns TIMED_OUT with the retained review when deadline expires during transient failures",
+    async (t) => {
+      let now = 1_000;
+      const clock = t.mock.method(performance, "now", () => now);
+      onSleep = (delay) => {
+        now += delay;
+      };
+      try {
+        // Case 1: deadline expires while backing off after a tolerated 502.
+        const afterBackoff = await server(t, (_, response, calls) => {
+          if (calls.length === 1) return json(response, 200, review("RUNNING"));
+          json(response, 502, { title: "bad gateway", detail: "blip" });
+        });
+        const client1 = new ProoflineClient({
+          baseUrl: afterBackoff.baseUrl,
+          token,
+        });
+        const result1 = await client1.waitForReview(orgId, reviewId, {
+          timeoutMs: 10_000,
+        });
+        assert.equal(afterBackoff.calls.length, 2);
+        assert.equal(result1.status, "TIMED_OUT");
+        assert.equal(result1.review.status, "RUNNING");
+        assert.equal(
+          result1.reviewUrl,
+          `${afterBackoff.baseUrl}/orgs/by-id/${orgId}/reviews/${reviewId}`,
+        );
+
+        // Case 2: fifth consecutive 502 arrives after the deadline has passed.
+        now = 1_000;
+        const atFifth = await server(t, (_, response, calls) => {
+          if (calls.length === 1) return json(response, 200, review("RUNNING"));
+          if (calls.length === 6) now = 200_000;
+          json(response, 502, { title: "bad gateway", detail: "blip" });
+        });
+        const client2 = new ProoflineClient({
+          baseUrl: atFifth.baseUrl,
+          token,
+        });
+        const result2 = await client2.waitForReview(orgId, reviewId, {
+          timeoutMs: 150_000,
+        });
+        assert.equal(atFifth.calls.length, 6);
+        assert.equal(result2.status, "TIMED_OUT");
+        assert.equal(result2.review.status, "RUNNING");
+      } finally {
+        onSleep = null;
+        clock.mock.restore();
+      }
+    },
+  );
+});
+
 test("pagination keeps filters and refuses cycles, incomplete metadata and resource bounds", async (t) => {
   let mode = "normal";
   const fixture = await server(t, (request, response) => {
