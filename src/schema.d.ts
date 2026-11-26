@@ -722,17 +722,17 @@ export interface components {
              */
             route?: components["schemas"]["SummaryRoute"] | null;
         };
-        /** @description One file World cited for a check's result. */
+        /** @description One file the evaluator cited for a check's result. */
         CheckFile: {
             /** @description The repository-relative path. It is repository text. */
             path: components["schemas"]["UntrustedText"];
-            /** @description The revision World read the file at. */
+            /** @description The revision the evaluator read the file at. */
             revision: components["schemas"]["CheckFileRevision"];
         };
         /** @description The revision a cited file was read at. */
         CheckFileRevision: "PROPOSED_CODE_REVISION" | "BASE_CODE_REVISION";
         /**
-         * @description World's lifecycle disclosure for the evaluator version that answered, as
+         * @description The lifecycle the evaluator disclosed for the version that answered, as
          *      the receipt recorded it. A deployment gate counts only `GATING` results
          *      (`DeterministicCoverage::gate_effective_status`), and only when it
          *      evaluates a deployment; the lifecycle alone permits or blocks nothing.
@@ -1057,7 +1057,12 @@ export interface components {
          */
         CreditRefusalCause: "OUT_OF_CREDITS" | "SPEND_LIMIT_REACHED";
         CustomerAssessment: {
-            /** @description The deterministic World checks recorded for this assessment. */
+            /**
+             * @description The deterministic environment checks recorded for this assessment.
+             *      Only assessments made by the check evaluator Proofline retired on
+             *      2026-11-05 carry them. A later assessment records none, and
+             *      `receipt_recorded` is then false.
+             */
             checks: components["schemas"]["CustomerChecks"];
             /**
              * Format: date-time
@@ -1108,7 +1113,12 @@ export interface components {
             status: string;
         };
         CustomerAssessmentDetail: {
-            /** @description The deterministic World checks recorded for this assessment. */
+            /**
+             * @description The deterministic environment checks recorded for this assessment.
+             *      Only assessments made by the check evaluator Proofline retired on
+             *      2026-11-05 carry them. A later assessment records none, and
+             *      `receipt_recorded` is then false.
+             */
             checks: components["schemas"]["CustomerChecks"];
             /**
              * Format: date-time
@@ -1170,19 +1180,19 @@ export interface components {
         };
         CustomerCheck: {
             /**
-             * @description Why World refused the check, or otherwise World's recorded explanation
-             *      of the result. Null when neither is recorded.
+             * @description Why the evaluator refused the check, or otherwise its recorded
+             *      explanation of the result. Null when neither is recorded.
              */
             detail?: string | null;
             /**
-             * @description When World evaluated this answer. A reused answer is evidence from
-             *      this instant, which can precede the assessment.
+             * @description When the evaluator produced this answer. A reused answer is evidence
+             *      from this instant, which can precede the assessment.
              */
             evaluated_at?: string | null;
             /**
-             * @description The files World cited as evidence for this result, once each in
-             *      World's order, with the revision World read each at. Empty when World
-             *      cited no file, and on results recorded before World cited files.
+             * @description The files the evaluator cited as evidence for this result, once each
+             *      in the evaluator's order, with the revision it read each at. Empty
+             *      when it cited no file, and on results recorded before it cited files.
              */
             files: components["schemas"]["CheckFile"][];
             /**
@@ -1199,7 +1209,8 @@ export interface components {
              */
             outcome: string;
             /**
-             * @description Why an `UNRESOLVED` check did not settle, as World's verdict gave it.
+             * @description Why an `UNRESOLVED` check did not settle, as the evaluator's verdict
+             *      gave it.
              *      Absent on every other outcome, and on an unresolved receipt whose
              *      verdict names none of these reasons.
              */
@@ -1224,7 +1235,7 @@ export interface components {
         };
         /**
          * @description The review's code assessment as it recorded its run. Its findings
-         *      rest on the pinned code alone, never on World evidence.
+         *      rest on the pinned code alone, never on infrastructure evidence.
          */
         CustomerCodeAssessment: {
             /** @description The base commit the code assessment compared the head with. */
@@ -1310,7 +1321,7 @@ export interface components {
             /**
              * @description The reference's display label, such as a path with its line range. A
              *      recorded read, a vendor documentation read, a customer tool call, a
-             *      static analysis result or an unnamed World entity carries a fixed
+             *      static analysis result or an unnamed infrastructure entity carries a fixed
              *      label, and a deterministic test carries its check's readable name.
              */
             label: string;
@@ -1545,8 +1556,9 @@ export interface components {
             base_ref?: string | null;
             /**
              * @description The change-level diagram: the changed call path from the pinned code
-             *      index and the relations World declares. Absent when the review
-             *      recorded none.
+             *      index. A diagram recorded by the check evaluator Proofline retired on
+             *      2026-11-05 can also show the environment relations it returned.
+             *      Absent when the review recorded none.
              */
             change_diagram?: components["schemas"]["ChangeDiagramView"] | null;
             /**
@@ -4102,7 +4114,7 @@ export interface components {
         /** @enum {string} */
         ThreadReplyEvidence: "RECORDED" | "NONE_CONFIRMED" | "INCOMPLETE";
         /**
-         * @description World's reason an executed check did not settle. A gate weighs the three
+         * @description The evaluator's reason an executed check did not settle. A gate weighs the three
          *      alike, and each asks the reader for a different response.
          */
         UnresolvedReason: "NEEDS_EVIDENCE" | "UNSUPPORTED" | "REGENERATE_SCENARIO";
