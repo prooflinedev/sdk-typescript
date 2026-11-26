@@ -211,6 +211,12 @@ export class ProoflineClient extends Operations {
     throw paginationLimit("the review collection exceeds maxPages");
   }
 
+  /**
+   * Polls a review until it reaches a terminal state or `timeoutMs` expires.
+   * Once an initial read succeeds, up to four consecutive transient read
+   * failures (`urn:proofline:sdk:transport` or HTTP 5xx) are tolerated before
+   * the fifth consecutive failure is rethrown.
+   */
   async waitForReview(
     orgId: string,
     reviewId: string,
@@ -223,6 +229,7 @@ export class ProoflineClient extends Operations {
     const url = this.#transport.reviewUrl(orgId, reviewId);
     let review: Review | null = null;
     let interval = 5_000;
+    let failedReads = 0;
     for (;;) {
       if (performance.now() >= deadline)
         return outcome(
@@ -231,8 +238,9 @@ export class ProoflineClient extends Operations {
           review,
           "the review did not finish before timeoutMs",
         );
+      let next: Review | undefined;
       try {
-        review = await this.#transport.request<Review>(
+        next = await this.#transport.request<Review>(
           "GET",
           "/api/v1/organizations/{org_id}/reviews/{review_id}",
           { path: { org_id: orgId, review_id: reviewId } },
@@ -260,23 +268,39 @@ export class ProoflineClient extends Operations {
             review,
             "the review did not finish before timeoutMs",
           );
-        throw error;
+        if (review !== null && transientReadFailure(error)) {
+          if (performance.now() >= deadline)
+            return outcome(
+              "TIMED_OUT",
+              url,
+              review,
+              "the review did not finish before timeoutMs",
+            );
+          failedReads += 1;
+          if (failedReads > MAX_TRANSIENT_READ_FAILURES) throw error;
+        } else {
+          throw error;
+        }
       }
-      validateReview(review, reviewId);
-      const status = terminal(review);
-      if (status !== null)
-        return outcome(
-          status,
-          url,
-          review,
-          status === "INCOMPLETE"
-            ? review.assessment_count === 0 && review.assessments.length === 0
-              ? "the code assessment is unavailable or incomplete"
-              : review.status !== "INCOMPLETE"
-                ? "one or more assessment results are unavailable or unknown"
-                : null
-            : null,
-        );
+      if (next !== undefined) {
+        validateReview(next, reviewId);
+        review = next;
+        failedReads = 0;
+        const status = terminal(review);
+        if (status !== null)
+          return outcome(
+            status,
+            url,
+            review,
+            status === "INCOMPLETE"
+              ? review.assessment_count === 0 && review.assessments.length === 0
+                ? "the code assessment is unavailable or incomplete"
+                : review.status !== "INCOMPLETE"
+                  ? "one or more assessment results are unavailable or unknown"
+                  : null
+              : null,
+          );
+      }
       await sleep(
         Math.min(interval, Math.max(0, deadline - performance.now())),
       );
@@ -300,6 +324,16 @@ function integerLimit(value: number, name: string): number {
   if (!Number.isSafeInteger(value) || value <= 0)
     throw new TypeError(`${name} must be a positive integer`);
   return value;
+}
+
+const MAX_TRANSIENT_READ_FAILURES = 4;
+
+function transientReadFailure(error: unknown): boolean {
+  return (
+    error instanceof ProoflineError &&
+    (error.type === "urn:proofline:sdk:transport" ||
+      (error.status >= 500 && error.status < 600))
+  );
 }
 
 const COMPLETE_CHECKS = new Set(["READY", "BLOCKED", "NOT_APPLICABLE"]);
