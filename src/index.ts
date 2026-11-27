@@ -2,6 +2,20 @@ import { FixesClient } from "./fixes.js";
 
 export type { ReverificationRequest } from "./fixes.js";
 
+import { ConfigClient } from "./config.js";
+
+export type {
+  ChangeProposal,
+  CitedFile,
+  ConfigurationSelector,
+  DescribeOperationRequest,
+  OperationsFilter,
+} from "./config.js";
+
+import { SetupClient } from "./setup.js";
+
+export type { SetupCandidatesQuery } from "./setup.js";
+
 import { type CoverageFilesUpload, readCoverageFiles } from "./coverage.js";
 
 export type { CoverageFile, CoverageFilesUpload } from "./coverage.js";
@@ -82,6 +96,8 @@ export class ProoflineClient extends Operations {
   readonly mcp: McpClient;
   readonly knowledge: KnowledgeClient;
   readonly fixes: FixesClient;
+  readonly config: ConfigClient;
+  readonly setup: SetupClient;
 
   constructor(options: ClientOptions = {}) {
     const transport = new Transport(options);
@@ -92,6 +108,8 @@ export class ProoflineClient extends Operations {
     this.mcp = new McpClient(transport);
     this.knowledge = new KnowledgeClient(transport);
     this.fixes = new FixesClient(transport);
+    this.config = new ConfigClient(transport);
+    this.setup = new SetupClient(transport);
   }
 
   async exportReviews(parameters: ExportParameters): Promise<ExportPage> {

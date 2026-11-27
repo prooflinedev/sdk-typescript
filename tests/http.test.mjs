@@ -2419,6 +2419,189 @@ test("MCP helpers isolate per-call organizations and preserve refusals", async (
   assert.equal(calls.length, observed.length * 3);
 });
 
+test("config and setup MCP clients forward selectors, validate locally and keep refusals", async (t) => {
+  const admitted = new Set([orgId]);
+  const observed = [];
+  const { baseUrl } = await server(t, (request, response, seen) => {
+    assert.equal(request.url, "/mcp");
+    const body = JSON.parse(seen.at(-1).body);
+    if (body.method === "initialize")
+      return json(response, 200, {
+        jsonrpc: "2.0",
+        id: 1,
+        result: { protocolVersion: "2025-11-25" },
+      });
+    if (body.method === "notifications/initialized") {
+      response.writeHead(202);
+      return response.end();
+    }
+    const { arguments: args } = body.params;
+    observed.push(body.params);
+    const code =
+      args.organization_id === undefined
+        ? "ORGANIZATION_REQUIRED"
+        : !admitted.has(args.organization_id)
+          ? "NOT_AUTHORIZED"
+          : undefined;
+    const payload = code
+      ? {
+          ok: false,
+          error: { code, message: "Target refused", retryable: false },
+        }
+      : { ok: true, data: { organization_id: args.organization_id } };
+    return json(response, 200, {
+      jsonrpc: "2.0",
+      id: 2,
+      result: {
+        isError: code !== undefined,
+        content: [{ type: "text", text: JSON.stringify(payload) }],
+        structuredContent: payload,
+      },
+    });
+  });
+  const client = new ProoflineClient({ baseUrl, token });
+
+  const reads = [
+    ["get_configuration", (o) => client.config.getConfiguration(o), {}],
+    [
+      "get_configuration",
+      (o) =>
+        client.config.getConfiguration({
+          environment_id: reviewId,
+          repository: "owner/name",
+          ...o,
+        }),
+      { environment_id: reviewId, repository: "owner/name" },
+    ],
+    ["list_operations", (o) => client.config.listOperations(o), {}],
+    [
+      "list_operations",
+      (o) =>
+        client.config.listOperations({
+          area: "REPOSITORY_REVIEW_SETTINGS",
+          subject: "repository",
+          ...o,
+        }),
+      { area: "REPOSITORY_REVIEW_SETTINGS", subject: "repository" },
+    ],
+    [
+      "describe_operation",
+      (o) =>
+        client.config.describeOperation({
+          operation: "organization.settings.update",
+          ...o,
+        }),
+      { operation: "organization.settings.update", parameters: {} },
+    ],
+    [
+      "describe_operation",
+      (o) =>
+        client.config.describeOperation({
+          operation: "repository.wiki_settings.update",
+          parameters: { repo_id: "repo-slug", label: "a=b" },
+          ...o,
+        }),
+      {
+        operation: "repository.wiki_settings.update",
+        parameters: { repo_id: "repo-slug", label: "a=b" },
+      },
+    ],
+    ["get_setup_status", (o) => client.setup.getStatus(o), {}],
+    ["list_setup_candidates", (o) => client.setup.listCandidates(o), {}],
+    [
+      "list_setup_candidates",
+      (o) => client.setup.listCandidates({ query: "api", ...o }),
+      { query: "api" },
+    ],
+  ];
+  for (const [name, invoke, args] of reads) {
+    const answer = await invoke({ organization_id: orgId });
+    assert.equal(answer.structuredContent.data.organization_id, orgId);
+    assert.deepEqual(observed.at(-1), {
+      name,
+      arguments: { ...args, organization_id: orgId },
+    });
+  }
+
+  // Each proposal carries a fresh version 7 UUID and preserves the change file.
+  const change = {
+    operation: "environment.review_focus.update",
+    parameters: { env_id: reviewId },
+    input: { focus: "production" },
+    expected_revision: "a".repeat(64),
+    cited_files: [
+      {
+        repository_id: repoId,
+        commit_sha: "b".repeat(40),
+        path: "infra/main.tf",
+      },
+    ],
+  };
+  const ids = new Set();
+  for (let index = 0; index < 2; index += 1) {
+    await client.config.proposeChange({ ...change, organization_id: orgId });
+    const args = observed.at(-1).arguments;
+    assert.equal(observed.at(-1).name, "propose_change");
+    const id = args.request_id;
+    assert.match(
+      id,
+      /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    );
+    assert.ok(!ids.has(id));
+    ids.add(id);
+    const rest = { ...args };
+    delete rest.request_id;
+    assert.deepEqual(rest, { ...change, organization_id: orgId });
+  }
+
+  // apply_change forwards the UUID and the per-call organization.
+  await client.config.applyChange(reviewId, { organization_id: orgId });
+  assert.deepEqual(observed.at(-1), {
+    name: "apply_change",
+    arguments: { change_id: reviewId, organization_id: orgId },
+  });
+
+  // Local validation refuses before any request is sent.
+  const before = observed.length;
+  const invalid = [
+    () => client.config.describeOperation({ operation: "" }),
+    () =>
+      client.config.describeOperation({
+        operation: "x",
+        parameters: { repo_id: 7 },
+      }),
+    () => client.config.proposeChange({ operation: "" }),
+    () =>
+      client.config.proposeChange({
+        operation: "x",
+        cited_files: [
+          { repository_id: repoId, commit_sha: "short", path: "p" },
+        ],
+      }),
+    () =>
+      client.config.proposeChange({
+        operation: "x",
+        cited_files: [{ repository_id: repoId, commit_sha: "b".repeat(40) }],
+      }),
+    () => client.config.applyChange("not-a-uuid"),
+    () => client.setup.listCandidates({ query: "" }),
+    () => client.setup.listCandidates({ query: "x".repeat(101) }),
+  ];
+  for (const invoke of invalid)
+    assert.throws(invoke, (error) => error instanceof TypeError);
+  assert.equal(observed.length, before);
+
+  // A refused target keeps isError and the server code without retrying.
+  const refused = await client.config.getConfiguration({
+    organization_id: "00000000-0000-7000-8000-000000000007",
+  });
+  assert.equal(refused.isError, true);
+  assert.equal(refused.structuredContent.error.code, "NOT_AUTHORIZED");
+  const required = await client.setup.getStatus();
+  assert.equal(required.isError, true);
+  assert.equal(required.structuredContent.error.code, "ORGANIZATION_REQUIRED");
+});
+
 test("public MCP types accept existing and targeted calls", async (t) => {
   // Check consumer code against the built public declarations, including
   // object literals whose extra properties JavaScript HTTP tests cannot check.
@@ -2429,11 +2612,17 @@ test("public MCP types accept existing and targeted calls", async (t) => {
   await writeFile(
     fixture,
     `
-import type { ProoflineClient, KnowledgeResult, McpTarget, RepositoryKnowledge, ReverificationRequest } from ${JSON.stringify(entry)};
+import type { ProoflineClient, KnowledgeResult, McpTarget, RepositoryKnowledge, ReverificationRequest, ChangeProposal, CitedFile, ConfigurationSelector, DescribeOperationRequest, OperationsFilter, SetupCandidatesQuery } from ${JSON.stringify(entry)};
 export async function use(client: ProoflineClient): Promise<void> {
   const target: McpTarget = { organization_id: "00000000-0000-7000-8000-000000000001" };
   const repository: RepositoryKnowledge = { repository: "owner/name", commit: "a".repeat(40), ...target };
   const verification: ReverificationRequest = { review_id: "review-id", finding_ids: ["finding-id"], commit_sha: "a".repeat(40), ...target };
+  const selector: ConfigurationSelector = { environment_id: "environment-id", repository: "owner/name", ...target };
+  const filter: OperationsFilter = { area: "REPOSITORY_REVIEW_SETTINGS", subject: "repository", ...target };
+  const describe: DescribeOperationRequest = { operation: "repository.wiki_settings.update", parameters: { repo_id: "repo-slug" }, ...target };
+  const cited: CitedFile = { repository_id: "repo-id", commit_sha: "b".repeat(40), path: "infra/main.tf" };
+  const proposal: ChangeProposal = { operation: "environment.review_focus.update", parameters: { env_id: "environment-id" }, input: { focus: "production" }, expected_revision: "a".repeat(64), cited_files: [cited], ...target };
+  const candidates: SetupCandidatesQuery = { query: "api", ...target };
   const results: KnowledgeResult[] = await Promise.all([
     client.mcp.listOrganizations(),
     client.knowledge.listWikiPages({ repository: "owner/name" }),
@@ -2458,6 +2647,20 @@ export async function use(client: ProoflineClient): Promise<void> {
     client.fixes.requestReverification(verification),
     client.fixes.getReverification("request-id"),
     client.fixes.getReverification("request-id", target),
+    client.config.getConfiguration(),
+    client.config.getConfiguration(selector),
+    client.config.listOperations(),
+    client.config.listOperations(filter),
+    client.config.describeOperation({ operation: "organization.settings.update" }),
+    client.config.describeOperation(describe),
+    client.config.proposeChange({ operation: "repository.wiki_settings.update", input: { enabled: true } }),
+    client.config.proposeChange(proposal),
+    client.config.applyChange("00000000-0000-7000-8000-000000000002"),
+    client.config.applyChange("00000000-0000-7000-8000-000000000002", target),
+    client.setup.getStatus(),
+    client.setup.getStatus(target),
+    client.setup.listCandidates(),
+    client.setup.listCandidates(candidates),
   ]);
   console.log(results);
 }

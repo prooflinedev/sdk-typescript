@@ -154,6 +154,24 @@ if (result.isError) throw new Error("Re-verification was refused.");
 
 The commit must be the live pushed head, which the server confirms. Each request accepts 1 to 20 distinct findings from one review and an optional note of 1 to 2,000 characters. Reads require `reviews:read`; requesting re-verification also requires `reviews:request` and repository write access. Calls never retry. Results retain untrusted-text wrappers, availability, assessment gaps, and `isError`. `PENDING` and `NOT_VERIFIED` do not establish a fix, and a tool request never records a human disposition.
 
+## Configuration and setup
+
+`client.config` exposes `getConfiguration`, `listOperations`, `describeOperation`, `proposeChange`, and `applyChange`. `client.setup` exposes `getStatus` and `listCandidates`. All seven call the same hosted MCP tools as the CLI, over the same endpoint, with the same per-call `organization_id` selection and `isError` refusals.
+
+```ts
+const status = await client.setup.getStatus({ organization_id: organizationId });
+const change = await client.config.proposeChange({
+  operation: "repository.wiki_settings.update",
+  parameters: { repo_id: repositoryId },
+  input: { enabled: true },
+});
+if (change.isError) throw new Error("The proposal was refused.");
+```
+
+`proposeChange` proposes without applying. Each call carries a fresh version 7 UUID `request_id`, as the CLI generates, and preserves every other field of the change object. It refuses a malformed `cited_files` entry locally: each entry needs a `repository_id`, a `path`, and a full 40 or 64 hexadecimal character `commit_sha`. `applyChange` takes the proposal's UUID `change_id`; a sensitive change can return `applied: false` with a browser `approval_url`, and the result keeps that answer unchanged. `listCandidates` accepts an optional `query` of 1 to 100 characters.
+
+The CLI signs in for these tools with `reviews:read`, `findings:read`, `guidance:read`, `reviews:request`, `setup:write`, and `org:configure`. The server enforces each tool's scopes; a missing scope retains the `NOT_AUTHORIZED` refusal. Calls never retry.
+
 ## Contributing and development
 
 The repository bundles its public API contract in `openapi.public.json`. New public operations generate typed methods on `ProoflineClient` from their OpenAPI operation IDs. To regenerate the client and verify changes locally, run `pnpm install --frozen-lockfile`, `pnpm generate`, `pnpm build`, `pnpm lint`, `pnpm typecheck`, and `pnpm test`.
