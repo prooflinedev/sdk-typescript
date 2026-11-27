@@ -1507,6 +1507,67 @@ test("the wait timeout includes an in-flight request and returns the retained re
   }
 });
 
+test("review waits retry passing read failures within a bound", {
+  concurrency: true,
+}, async (t) => {
+  // Each step is an HTTP status, "drop" to close the socket, or a review status.
+  async function waiting(t, steps, options = { timeoutMs: 60_000 }) {
+    const fixture = await server(t, (_, response, calls) => {
+      const step = steps[Math.min(calls.length, steps.length) - 1];
+      if (step === "drop") return response.destroy();
+      if (typeof step === "number")
+        return json(response, step, { title: "refused" });
+      json(response, 200, review(step));
+    });
+    const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
+    return {
+      fixture,
+      result: client.waitForReview(orgId, reviewId, options),
+    };
+  }
+  await Promise.all([
+    ...["drop", 502, 504].map((failure) =>
+      t.test(`recovers after ${failure}`, async (t) => {
+        const { fixture, result } = await waiting(t, [failure, "COMPLETED"]);
+        assert.equal((await result).status, "COMPLETED");
+        assert.equal(fixture.calls.length, 2);
+        assert(fixture.calls[1].at - fixture.calls[0].at >= 990);
+      }),
+    ),
+    t.test("throws the last error after three retries", async (t) => {
+      const { fixture, result } = await waiting(t, [502, 502, 502, 504]);
+      await assert.rejects(result, (error) => error.status === 504);
+      assert.equal(fixture.calls.length, 4);
+    }),
+    t.test("a successful read restores the retries", async (t) => {
+      const { fixture, result } = await waiting(t, [
+        502,
+        502,
+        502,
+        "RUNNING",
+        "drop",
+        "COMPLETED",
+      ]);
+      assert.equal((await result).status, "COMPLETED");
+      assert.equal(fixture.calls.length, 6);
+    }),
+    t.test("does not pause past the deadline", async (t) => {
+      const { fixture, result } = await waiting(t, [502, "COMPLETED"], {
+        timeoutMs: 500,
+      });
+      await assert.rejects(result, (error) => error.status === 502);
+      assert.equal(fixture.calls.length, 1);
+    }),
+    ...[401, 403, 404, 500].map((status) =>
+      t.test(`throws ${status} at once`, async (t) => {
+        const { fixture, result } = await waiting(t, [status, "COMPLETED"]);
+        await assert.rejects(result, (error) => error.status === status);
+        assert.equal(fixture.calls.length, 1);
+      }),
+    ),
+  ]);
+});
+
 test("pagination keeps filters and refuses cycles, incomplete metadata and resource bounds", async (t) => {
   let mode = "normal";
   const fixture = await server(t, (request, response) => {
