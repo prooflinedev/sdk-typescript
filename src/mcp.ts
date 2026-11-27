@@ -53,6 +53,8 @@ class McpEventStreamDecoder implements StreamResponseDecoder {
   readonly #decoder = new TextDecoder("utf-8", { fatal: true });
   #buffer = "";
   #data: string[] = [];
+  #scanIndex = 0;
+  #ignoreNextLF = false;
 
   constructor(id: number) {
     this.#id = id;
@@ -75,23 +77,37 @@ class McpEventStreamDecoder implements StreamResponseDecoder {
   #consume(final = false):
     | { complete: false }
     | { complete: true; value: unknown } {
+    if (this.#ignoreNextLF && this.#buffer.length > 0) {
+      if (this.#buffer[0] === "\n") this.#buffer = this.#buffer.slice(1);
+      this.#ignoreNextLF = false;
+      this.#scanIndex = 0;
+    }
+
     let start = 0;
-    for (let index = 0; index < this.#buffer.length; index += 1) {
+    const length = this.#buffer.length;
+    for (let index = this.#scanIndex; index < length; index += 1) {
       const char = this.#buffer[index];
       if (char !== "\r" && char !== "\n") continue;
-      if (char === "\r" && index + 1 === this.#buffer.length && !final) break;
       const line = this.#buffer.slice(start, index);
+      const isTrailingCR = char === "\r" && index + 1 === length;
       start =
         index + (char === "\r" && this.#buffer[index + 1] === "\n" ? 2 : 1);
+      if (isTrailingCR && !final) this.#ignoreNextLF = true;
       index = start - 1;
       const result = this.#line(line);
       if (result) {
         this.#buffer = this.#buffer.slice(start);
+        this.#scanIndex = 0;
         return result;
       }
     }
     this.#buffer = this.#buffer.slice(start);
-    if (final && this.#buffer) this.#line(this.#buffer);
+    this.#scanIndex = length - start;
+    if (final && this.#buffer) {
+      this.#line(this.#buffer);
+      this.#buffer = "";
+      this.#scanIndex = 0;
+    }
     return { complete: false };
   }
 

@@ -2009,6 +2009,65 @@ test(
 test("MCP SSE matching response cancels the still-open reader", async (t) => {
   const originalFetch = globalThis.fetch;
   let cancelled = 0;
+  let finishCancellation;
+  let cancellationSettled = false;
+  globalThis.fetch = async (_url, init) => {
+    const body = JSON.parse(init.body);
+    if (body.method === "notifications/initialized")
+      return new Response(null, { status: 202 });
+    if (body.method === "initialize")
+      return Response.json({
+        jsonrpc: "2.0",
+        id: 1,
+        result: { protocolVersion: "2025-11-25" },
+      });
+    return new Response(
+      new ReadableStream({
+        start(controller) {
+          const frame = new TextEncoder().encode(
+            'data: {"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"ok"}]}}\r\n\r\n',
+          );
+          controller.enqueue(frame.slice(0, 17));
+          controller.enqueue(frame.slice(17, -1));
+          controller.enqueue(frame.slice(-1));
+        },
+        cancel() {
+          cancelled += 1;
+          return new Promise((resolve) => {
+            finishCancellation = () => {
+              cancellationSettled = true;
+              resolve();
+            };
+          });
+        },
+      }),
+      { status: 200, headers: { "Content-Type": "text/event-stream" } },
+    );
+  };
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  const client = new ProoflineClient({ baseUrl: "http://127.0.0.1", token });
+  let returned = false;
+  const result = client.knowledge
+    .askCodebase({ repository: "owner/name", question: "status?" })
+    .then((value) => {
+      returned = true;
+      return value;
+    });
+  await new Promise((resolve) => setImmediate(resolve));
+  const returnedBeforeCancellationSettled = returned && !cancellationSettled;
+  finishCancellation?.();
+  assert.deepEqual(await result, {
+    content: [{ type: "text", text: "ok" }],
+  });
+  assert.equal(cancelled, 1);
+  assert.equal(returnedBeforeCancellationSettled, true);
+});
+
+test("MCP SSE trailing CR dispatches while the reader remains open", async (t) => {
+  const originalFetch = globalThis.fetch;
+  let cancelled = 0;
   globalThis.fetch = async (_url, init) => {
     const body = JSON.parse(init.body);
     if (body.method === "notifications/initialized")
@@ -2024,7 +2083,7 @@ test("MCP SSE matching response cancels the still-open reader", async (t) => {
         start(controller) {
           controller.enqueue(
             new TextEncoder().encode(
-              'data: {"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"ok"}]}}\n\n',
+              'data: {"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"ok"}]}}\r\r',
             ),
           );
         },
@@ -2038,7 +2097,11 @@ test("MCP SSE matching response cancels the still-open reader", async (t) => {
   t.after(() => {
     globalThis.fetch = originalFetch;
   });
-  const client = new ProoflineClient({ baseUrl: "http://127.0.0.1", token });
+  const client = new ProoflineClient({
+    baseUrl: "http://127.0.0.1",
+    token,
+    requestTimeoutMs: 500,
+  });
   assert.deepEqual(
     await client.knowledge.askCodebase({
       repository: "owner/name",
