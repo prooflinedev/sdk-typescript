@@ -1,7 +1,7 @@
 import { type KnowledgeResult, type McpTarget, McpTools } from "./mcp.js";
 
 export interface SetupCandidatesQuery extends McpTarget {
-  /** Keeps the candidates whose name matches, 1 to 100 characters. */
+  /** Keeps the candidates whose name matches, 1 to 100 Unicode code points. */
   query?: string;
 }
 
@@ -25,7 +25,7 @@ export class SetupClient extends McpTools {
       let length = 0;
       while (length <= 100 && !codePoints.next().done) length += 1;
       if (length < 1 || length > 100)
-        throw new TypeError("query must be 1 to 100 characters");
+        throw new TypeError("query must be 1 to 100 Unicode code points");
     }
     return this.call("list_setup_candidates", {
       query,

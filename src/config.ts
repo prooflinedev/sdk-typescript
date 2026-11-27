@@ -91,12 +91,17 @@ export class ConfigClient extends McpTools {
   }
   /** Proposes a change without applying it; each call carries a fresh request_id. */
   proposeChange(change: ChangeProposal): Promise<KnowledgeResult> {
-    // Snapshot the exact JSON payload before the first asynchronous step.
-    // Each getter is read once, and later caller edits, including edits to
-    // nested values, cannot change what this request sends.
+    // request_id is always generated. Copy every other own field once without
+    // reading a caller-supplied request_id, then snapshot the exact JSON payload
+    // before the first asynchronous step. Getters and later caller edits,
+    // including edits to nested values, cannot change what this request sends.
+    const source: Record<string, unknown> = {};
+    for (const key of Object.keys(change)) {
+      if (key !== "request_id") source[key] = change[key];
+    }
     let payload: ChangeProposal;
     try {
-      payload = JSON.parse(JSON.stringify(change)) as ChangeProposal;
+      payload = JSON.parse(JSON.stringify(source)) as ChangeProposal;
     } catch {
       throw new TypeError("change must be a JSON-serializable object");
     }

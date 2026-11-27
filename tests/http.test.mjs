@@ -2529,7 +2529,11 @@ test("config and setup MCP clients forward selectors, validate locally and keep 
     ],
   ];
   for (const [name, invoke, args] of reads) {
+    const beforeCalls = observed.length;
+    const beforeDispatches = dispatched;
     const answer = await invoke({ organization_id: orgId });
+    assert.equal(observed.length, beforeCalls + 1);
+    assert.equal(dispatched, beforeDispatches + 3);
     assert.equal(answer.structuredContent.data.organization_id, orgId);
     assert.deepEqual(observed.at(-1), {
       name,
@@ -2539,10 +2543,12 @@ test("config and setup MCP clients forward selectors, validate locally and keep 
 
   // The candidate list forwards each call's own organization, not the first.
   admitted.add(secondOrgId);
+  const beforeSecond = observed.length;
   const secondAnswer = await client.setup.listCandidates({
     query: "api",
     organization_id: secondOrgId,
   });
+  assert.equal(observed.length, beforeSecond + 1);
   assert.equal(
     secondAnswer.structuredContent.data.organization_id,
     secondOrgId,
@@ -2554,10 +2560,12 @@ test("config and setup MCP clients forward selectors, validate locally and keep 
 
   // The query limit counts code points, not UTF-16 units.
   const astral = "😀".repeat(100);
+  const beforeAstral = observed.length;
   const astralAnswer = await client.setup.listCandidates({
     query: astral,
     organization_id: orgId,
   });
+  assert.equal(observed.length, beforeAstral + 1);
   assert.equal(astralAnswer.structuredContent.data.organization_id, orgId);
   assert.equal(observed.at(-1).arguments.query, astral);
 
@@ -2583,7 +2591,9 @@ test("config and setup MCP clients forward selectors, validate locally and keep 
   };
   const ids = new Set();
   for (let index = 0; index < 2; index += 1) {
+    const beforeProposal = observed.length;
     await client.config.proposeChange({ ...change, organization_id: orgId });
+    assert.equal(observed.length, beforeProposal + 1);
     const args = observed.at(-1).arguments;
     assert.equal(observed.at(-1).name, "propose_change");
     const id = args.request_id;
@@ -2611,6 +2621,7 @@ test("config and setup MCP clients forward selectors, validate locally and keep 
       },
     ],
   };
+  const beforeMutable = observed.length;
   const pending = client.config.proposeChange({
     ...mutable,
     organization_id: orgId,
@@ -2621,6 +2632,7 @@ test("config and setup MCP clients forward selectors, validate locally and keep 
   mutable.cited_files[0].path = "";
   mutable.cited_files[0] = null;
   await pending;
+  assert.equal(observed.length, beforeMutable + 1);
   const sent = observed.at(-1).arguments;
   assert.equal(sent.parameters.env_id, reviewId);
   assert.equal(sent.input.focus, "production");
@@ -2643,7 +2655,9 @@ test("config and setup MCP clients forward selectors, validate locally and keep 
       return queryReads === 1 ? "api" : "x".repeat(200);
     },
   };
+  const beforeTrickyQuery = observed.length;
   await client.setup.listCandidates(trickyQuery);
+  assert.equal(observed.length, beforeTrickyQuery + 1);
   assert.equal(observed.at(-1).arguments.query, "api");
   let citationReads = 0;
   const trickyChange = {
@@ -2662,7 +2676,9 @@ test("config and setup MCP clients forward selectors, validate locally and keep 
         : [{ repository_id: repoId, commit_sha: "short", path: "p" }];
     },
   };
+  const beforeTrickyChange = observed.length;
   await client.config.proposeChange(trickyChange);
+  assert.equal(observed.length, beforeTrickyChange + 1);
   assert.deepEqual(observed.at(-1).arguments.cited_files, [
     {
       repository_id: repoId,
@@ -2671,8 +2687,37 @@ test("config and setup MCP clients forward selectors, validate locally and keep 
     },
   ]);
 
+  // A caller-supplied request_id is discarded without being read, so a bigint
+  // or a throwing getter in that ignored field cannot block a valid proposal.
+  const beforeBigint = observed.length;
+  await client.config.proposeChange({
+    operation: "environment.review_focus.update",
+    organization_id: orgId,
+    request_id: 10n,
+  });
+  assert.equal(observed.length, beforeBigint + 1);
+  assert.match(
+    observed.at(-1).arguments.request_id,
+    /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+  );
+  const beforeHostile = observed.length;
+  await client.config.proposeChange({
+    operation: "environment.review_focus.update",
+    organization_id: orgId,
+    get request_id() {
+      throw new Error("request_id must not be read");
+    },
+  });
+  assert.equal(observed.length, beforeHostile + 1);
+  assert.match(
+    observed.at(-1).arguments.request_id,
+    /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+  );
+
   // apply_change forwards the UUID and the per-call organization.
+  const beforeApply = observed.length;
   await client.config.applyChange(reviewId, { organization_id: orgId });
+  assert.equal(observed.length, beforeApply + 1);
   assert.deepEqual(observed.at(-1), {
     name: "apply_change",
     arguments: { change_id: reviewId, organization_id: orgId },
@@ -2721,6 +2766,20 @@ test("config and setup MCP clients forward selectors, validate locally and keep 
         cited_files: [
           { repository_id: repoId, commit_sha: "b".repeat(40), path: "p" },
           { repository_id: repoId, commit_sha: "short", path: "p" },
+        ],
+      }),
+    () =>
+      client.config.proposeChange({
+        operation: "x",
+        cited_files: [
+          {
+            repository_id: repoId,
+            commit_sha: "b".repeat(40),
+            path: "p",
+            toJSON() {
+              return { repository_id: repoId, commit_sha: "short", path: "p" };
+            },
+          },
         ],
       }),
     () => client.config.proposeChange({ operation: "x", input: null }),
@@ -2821,6 +2880,7 @@ export async function use(client: ProoflineClient): Promise<void> {
     client.config.describeOperation(describe),
     client.config.describeOperation({ operation: "repository.wiki_settings.update", parameters: { repo_id: "repo-slug" }, organization_id: "org-id" }),
     client.config.proposeChange({ operation: "repository.wiki_settings.update", input: { enabled: true } }),
+    client.config.proposeChange({ operation: "environment.review_focus.update" }),
     client.config.proposeChange(proposal),
     client.config.proposeChange({ operation: "environment.review_focus.update", parameters: { env_id: "environment-id" }, input: { focus: "production" }, expected_revision: "a".repeat(64), cited_files: [{ repository_id: "repo-id", commit_sha: "b".repeat(40), path: "infra/main.tf" }], organization_id: "org-id" }),
     client.config.applyChange("00000000-0000-7000-8000-000000000002"),
