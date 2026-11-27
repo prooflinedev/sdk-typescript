@@ -8,6 +8,27 @@ const MAX_RETRY_SECONDS = 60;
 const inspect = Symbol.for("nodejs.util.inspect.custom");
 const secrets = new WeakMap<SecretToken, string>();
 
+function mediaType(headers: Headers): string | undefined {
+  return headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase();
+}
+
+function cancelReader(reader: ReadableStreamDefaultReader<Uint8Array>): void {
+  try {
+    void reader.cancel().catch(() => {});
+  } catch {
+    // Cleanup must not replace the response error.
+  }
+}
+
+export interface StreamResponseDecoder {
+  push(
+    chunk: Uint8Array,
+  ):
+    | { complete: false }
+    | { complete: true; value: unknown };
+  finish(): unknown;
+}
+
 /** Why a review request created nothing; `reason` names the setting to change. */
 export type RunNowRefusal = components["schemas"]["RunNowRefusalView"];
 
@@ -183,6 +204,7 @@ async function decoded(
   signal: AbortSignal,
   waitTimeout: boolean,
   decode: (text: string, headers: Headers) => unknown,
+  streamDecoder?: StreamResponseDecoder,
 ): Promise<unknown> {
   const reader = response.body?.getReader();
   if (!reader) {
@@ -201,15 +223,24 @@ async function decoded(
       if (done) break;
       size += value.byteLength;
       if (size > MAX_RESPONSE_BYTES) {
-        await reader.cancel();
+        cancelReader(reader);
         throw new ProoflineError(
           response.status,
           "urn:proofline:sdk:invalid-response",
           "the response exceeds 8 MiB",
         );
       }
+      if (streamDecoder) {
+        const result = streamDecoder.push(value);
+        if (result.complete) {
+          cancelReader(reader);
+          return result.value;
+        }
+        continue;
+      }
       chunks.push(value);
     }
+    if (streamDecoder) return streamDecoder.finish();
     const data = new Uint8Array(size);
     let offset = 0;
     for (const chunk of chunks) {
@@ -225,6 +256,7 @@ async function decoded(
       return undefined;
     }
   } catch (error) {
+    if (streamDecoder) cancelReader(reader);
     if (error instanceof ProoflineError) throw error;
     if (response.ok && (signal.aborted || performance.now() >= deadline))
       throw new ProoflineError(
@@ -437,6 +469,7 @@ export class Transport {
       JSON.parse(text),
     accept = "application/json, application/problem+json",
     mcpPhase?: "initialize" | "notification" | "call",
+    createStreamDecoder?: () => StreamResponseDecoder,
   ): Promise<T> {
     const path = Object.entries(parameters.path ?? {}).reduce(
       (value, [key, coordinateValue]) =>
@@ -505,12 +538,13 @@ export class Transport {
       }
       if (mcpPhase && response.ok) {
         const notification = mcpPhase === "notification";
+        const contentType = mediaType(response.headers);
         if (
           response.status !== (notification ? 202 : 200) ||
           response.headers.has("mcp-session-id") ||
           (!notification &&
-            response.headers.get("content-type")?.split(";")[0]?.trim() !==
-              "application/json")
+            contentType !== "application/json" &&
+            contentType !== "text/event-stream")
         ) {
           await response.body?.cancel();
           throw new ProoflineError(
@@ -527,6 +561,10 @@ export class Transport {
         signal,
         waitTimeout,
         decode,
+        response.ok &&
+        mediaType(response.headers) === "text/event-stream"
+          ? createStreamDecoder?.()
+          : undefined,
       );
       if (response.ok) return value as T;
       const error = problem(response.status, value, this.#token);

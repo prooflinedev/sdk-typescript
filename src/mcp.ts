@@ -1,4 +1,8 @@
-import { ProoflineError, type Transport } from "./transport.js";
+import {
+  ProoflineError,
+  type StreamResponseDecoder,
+  type Transport,
+} from "./transport.js";
 
 /** Strings in tool results remain untrusted; structuredContent is server-owned JSON. */
 export interface KnowledgeResult {
@@ -25,6 +29,13 @@ function refused(): ProoflineError {
     "Invalid or refused MCP response",
   );
 }
+function unsupportedServerRequest(): ProoflineError {
+  return new ProoflineError(
+    0,
+    "urn:proofline:sdk:mcp",
+    "This SDK cannot handle MCP server-initiated requests; use an MCP client that supports server request handlers.",
+  );
+}
 function envelope(value: unknown, id: number): Record<string, unknown> {
   if (
     !object(value) ||
@@ -37,6 +48,100 @@ function envelope(value: unknown, id: number): Record<string, unknown> {
   return value.result;
 }
 
+class McpEventStreamDecoder implements StreamResponseDecoder {
+  readonly #id: number;
+  readonly #decoder = new TextDecoder("utf-8", { fatal: true });
+  #buffer = "";
+  #data: string[] = [];
+  #scanIndex = 0;
+  #ignoreNextLF = false;
+
+  constructor(id: number) {
+    this.#id = id;
+  }
+
+  push(chunk: Uint8Array):
+    | { complete: false }
+    | { complete: true; value: unknown } {
+    this.#buffer += this.#decoder.decode(chunk, { stream: true });
+    return this.#consume();
+  }
+
+  finish(): unknown {
+    this.#buffer += this.#decoder.decode();
+    const result = this.#consume(true);
+    if (result.complete) return result.value;
+    throw refused();
+  }
+
+  #consume(final = false):
+    | { complete: false }
+    | { complete: true; value: unknown } {
+    if (this.#ignoreNextLF && this.#buffer.length > 0) {
+      if (this.#buffer[0] === "\n") this.#buffer = this.#buffer.slice(1);
+      this.#ignoreNextLF = false;
+      this.#scanIndex = 0;
+    }
+
+    let start = 0;
+    const length = this.#buffer.length;
+    for (let index = this.#scanIndex; index < length; index += 1) {
+      const char = this.#buffer[index];
+      if (char !== "\r" && char !== "\n") continue;
+      const line = this.#buffer.slice(start, index);
+      const isTrailingCR = char === "\r" && index + 1 === length;
+      start =
+        index + (char === "\r" && this.#buffer[index + 1] === "\n" ? 2 : 1);
+      if (isTrailingCR && !final) this.#ignoreNextLF = true;
+      index = start - 1;
+      const result = this.#line(line);
+      if (result) {
+        this.#buffer = this.#buffer.slice(start);
+        this.#scanIndex = 0;
+        return result;
+      }
+    }
+    this.#buffer = this.#buffer.slice(start);
+    this.#scanIndex = length - start;
+    if (final && this.#buffer) {
+      this.#line(this.#buffer);
+      this.#buffer = "";
+      this.#scanIndex = 0;
+    }
+    return { complete: false };
+  }
+
+  #line(line: string): { complete: true; value: unknown } | undefined {
+    if (line === "") {
+      if (!this.#data.length) return undefined;
+      const payload = this.#data.join("\n");
+      this.#data = [];
+      if (!payload) return undefined;
+      let message: unknown;
+      try {
+        message = JSON.parse(payload) as unknown;
+      } catch {
+        throw refused();
+      }
+      if (!object(message) || message.jsonrpc !== "2.0") throw refused();
+      if (typeof message.method === "string") {
+        if ("id" in message) throw unsupportedServerRequest();
+        return undefined;
+      }
+      if (message.id !== this.#id) throw refused();
+      return { complete: true, value: message };
+    }
+    if (line.startsWith(":")) return undefined;
+    const separator = line.indexOf(":");
+    const field = separator === -1 ? line : line.slice(0, separator);
+    if (field !== "data") return undefined;
+    let value = separator === -1 ? "" : line.slice(separator + 1);
+    if (value.startsWith(" ")) value = value.slice(1);
+    this.#data.push(value);
+    return undefined;
+  }
+}
+
 /** Typed knowledge operations over Proofline's stateless MCP endpoint. Calls never retry. */
 export class McpTools {
   constructor(private readonly transport: Transport) {}
@@ -47,6 +152,7 @@ export class McpTools {
     const invoke = (
       body: object,
       phase: "initialize" | "notification" | "call",
+      id?: number,
     ) =>
       this.transport.request<unknown>(
         "POST",
@@ -63,6 +169,9 @@ export class McpTools {
         },
         "application/json, text/event-stream",
         phase,
+        phase === "notification" || id === undefined
+          ? undefined
+          : () => new McpEventStreamDecoder(id),
       );
     const initialized = envelope(
       await invoke(
@@ -77,6 +186,7 @@ export class McpTools {
           },
         },
         "initialize",
+        1,
       ),
       1,
     );
@@ -94,6 +204,7 @@ export class McpTools {
           params: { name, arguments: callArguments },
         },
         "call",
+        2,
       ),
       2,
     );
