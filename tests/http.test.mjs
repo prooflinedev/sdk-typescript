@@ -2421,8 +2421,9 @@ test("MCP helpers isolate per-call organizations and preserve refusals", async (
 
 test("config and setup MCP clients forward selectors, validate locally and keep refusals", async (t) => {
   const admitted = new Set([orgId]);
+  const secondOrgId = "00000000-0000-7000-8000-000000000006";
   const observed = [];
-  const { baseUrl } = await server(t, (request, response, seen) => {
+  const { baseUrl, calls } = await server(t, (request, response, seen) => {
     assert.equal(request.url, "/mcp");
     const body = JSON.parse(seen.at(-1).body);
     if (body.method === "initialize")
@@ -2460,6 +2461,19 @@ test("config and setup MCP clients forward selectors, validate locally and keep 
     });
   });
   const client = new ProoflineClient({ baseUrl, token });
+
+  // Spy on outbound requests at dispatch time. The server log records requests
+  // asynchronously, so a synchronous local refusal needs this counter to prove
+  // it started no MCP negotiation at all.
+  const originalFetch = globalThis.fetch;
+  let dispatched = 0;
+  globalThis.fetch = (...args) => {
+    dispatched += 1;
+    return originalFetch(...args);
+  };
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
 
   const reads = [
     ["get_configuration", (o) => client.config.getConfiguration(o), {}],
@@ -2523,7 +2537,32 @@ test("config and setup MCP clients forward selectors, validate locally and keep 
     });
   }
 
+  // The candidate list forwards each call's own organization, not the first.
+  admitted.add(secondOrgId);
+  const secondAnswer = await client.setup.listCandidates({
+    query: "api",
+    organization_id: secondOrgId,
+  });
+  assert.equal(
+    secondAnswer.structuredContent.data.organization_id,
+    secondOrgId,
+  );
+  assert.deepEqual(observed.at(-1), {
+    name: "list_setup_candidates",
+    arguments: { query: "api", organization_id: secondOrgId },
+  });
+
+  // The query limit counts code points, not UTF-16 units.
+  const astral = "😀".repeat(100);
+  const astralAnswer = await client.setup.listCandidates({
+    query: astral,
+    organization_id: orgId,
+  });
+  assert.equal(astralAnswer.structuredContent.data.organization_id, orgId);
+  assert.equal(observed.at(-1).arguments.query, astral);
+
   // Each proposal carries a fresh version 7 UUID and preserves the change file.
+  // Two citations, one with a 64-character SHA, must both reach the server.
   const change = {
     operation: "environment.review_focus.update",
     parameters: { env_id: reviewId },
@@ -2534,6 +2573,11 @@ test("config and setup MCP clients forward selectors, validate locally and keep 
         repository_id: repoId,
         commit_sha: "b".repeat(40),
         path: "infra/main.tf",
+      },
+      {
+        repository_id: repoId,
+        commit_sha: "c".repeat(64),
+        path: "infra/network.tf",
       },
     ],
   };
@@ -2554,6 +2598,39 @@ test("config and setup MCP clients forward selectors, validate locally and keep 
     assert.deepEqual(rest, { ...change, organization_id: orgId });
   }
 
+  // Caller edits after the call starts must not change the sent payload.
+  const mutable = {
+    operation: "environment.review_focus.update",
+    parameters: { env_id: reviewId },
+    input: { focus: "production" },
+    cited_files: [
+      {
+        repository_id: repoId,
+        commit_sha: "b".repeat(40),
+        path: "infra/main.tf",
+      },
+    ],
+  };
+  const pending = client.config.proposeChange({
+    ...mutable,
+    organization_id: orgId,
+  });
+  mutable.parameters.env_id = "tampered";
+  mutable.input.focus = "tampered";
+  mutable.cited_files[0].path = "";
+  mutable.cited_files[0] = null;
+  await pending;
+  const sent = observed.at(-1).arguments;
+  assert.equal(sent.parameters.env_id, reviewId);
+  assert.equal(sent.input.focus, "production");
+  assert.deepEqual(sent.cited_files, [
+    {
+      repository_id: repoId,
+      commit_sha: "b".repeat(40),
+      path: "infra/main.tf",
+    },
+  ]);
+
   // apply_change forwards the UUID and the per-call organization.
   await client.config.applyChange(reviewId, { organization_id: orgId });
   assert.deepEqual(observed.at(-1), {
@@ -2563,6 +2640,7 @@ test("config and setup MCP clients forward selectors, validate locally and keep 
 
   // Local validation refuses before any request is sent.
   const before = observed.length;
+  const beforeDispatches = dispatched;
   const invalid = [
     () => client.config.describeOperation({ operation: "" }),
     () =>
@@ -2597,26 +2675,51 @@ test("config and setup MCP clients forward selectors, validate locally and keep 
           { repository_id: repoId, commit_sha: "b".repeat(40), path: "" },
         ],
       }),
+    () =>
+      client.config.proposeChange({
+        operation: "x",
+        cited_files: [
+          { repository_id: repoId, commit_sha: "b".repeat(40), path: "p" },
+          { repository_id: repoId, commit_sha: "short", path: "p" },
+        ],
+      }),
     () => client.config.applyChange("not-a-uuid"),
     () => client.setup.listCandidates({ query: "" }),
     () => client.setup.listCandidates({ query: "x".repeat(101) }),
+    () => client.setup.listCandidates({ query: "😀".repeat(101) }),
+    () => client.setup.listCandidates({ query: "x".repeat(1_000_000) }),
   ];
   for (const invoke of invalid)
     assert.throws(invoke, (error) => error instanceof TypeError);
   assert.equal(observed.length, before);
+  assert.equal(dispatched, beforeDispatches);
 
   // A refused target keeps isError and the server code without retrying.
+  // Each refusal is exactly one full handshake plus one tool request.
   const beforeRefusals = observed.length;
+  const dispatchBeforeRefusals = dispatched;
   const refused = await client.config.getConfiguration({
     organization_id: "00000000-0000-7000-8000-000000000007",
   });
   assert.equal(refused.isError, true);
   assert.equal(refused.structuredContent.error.code, "NOT_AUTHORIZED");
   assert.equal(observed.length, beforeRefusals + 1);
+  assert.equal(dispatched, dispatchBeforeRefusals + 3);
+  assert.deepEqual(
+    calls.slice(-3).map((call) => JSON.parse(call.body).method),
+    ["initialize", "notifications/initialized", "tools/call"],
+  );
   const required = await client.setup.getStatus();
   assert.equal(required.isError, true);
   assert.equal(required.structuredContent.error.code, "ORGANIZATION_REQUIRED");
   assert.equal(observed.length, beforeRefusals + 2);
+  assert.equal(dispatched, dispatchBeforeRefusals + 6);
+  assert.deepEqual(
+    calls.slice(-3).map((call) => JSON.parse(call.body).method),
+    ["initialize", "notifications/initialized", "tools/call"],
+  );
+  // Every tool call used exactly one handshake; nothing else was sent.
+  assert.equal(calls.length, observed.length * 3);
 });
 
 test("public MCP types accept existing and targeted calls", async (t) => {

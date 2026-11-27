@@ -16,7 +16,11 @@ export class SetupClient extends McpTools {
     if (args.query !== undefined) {
       if (typeof args.query !== "string")
         throw new TypeError("query must be a string");
-      const length = Array.from(args.query).length;
+      // Count code points without materializing them; stop at the first excess
+      // so an oversized query never scans or allocates beyond the limit.
+      const codePoints = args.query[Symbol.iterator]();
+      let length = 0;
+      while (length <= 100 && !codePoints.next().done) length += 1;
       if (length < 1 || length > 100)
         throw new TypeError("query must be 1 to 100 characters");
     }

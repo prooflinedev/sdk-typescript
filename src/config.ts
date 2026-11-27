@@ -76,7 +76,7 @@ export class ConfigClient extends McpTools {
       stringRecord(args.parameters, "parameters");
     return this.call("describe_operation", {
       operation: args.operation,
-      parameters: args.parameters ?? {},
+      parameters: { ...args.parameters },
       organization_id: args.organization_id,
     });
   }
@@ -86,26 +86,35 @@ export class ConfigClient extends McpTools {
       throw new TypeError("operation must be a nonempty string");
     if (change.parameters !== undefined)
       stringRecord(change.parameters, "parameters");
-    if (change.cited_files !== undefined) {
-      if (!Array.isArray(change.cited_files))
-        throw new TypeError("cited_files must be an array");
-      for (const file of change.cited_files) {
-        if (
-          file === null ||
-          typeof file !== "object" ||
-          typeof file.repository_id !== "string" ||
-          file.repository_id === "" ||
-          typeof file.path !== "string" ||
-          file.path === "" ||
-          typeof file.commit_sha !== "string" ||
-          !COMMIT_SHA.test(file.commit_sha)
-        )
-          throw new TypeError(
-            "cited_files entries need a nonempty repository_id, a nonempty path and a full commit SHA",
-          );
-      }
+    if (change.cited_files !== undefined && !Array.isArray(change.cited_files))
+      throw new TypeError("cited_files must be an array");
+    // Snapshot the payload before validation. Protocol negotiation yields to
+    // the caller, and later edits to the original objects must not change
+    // what this request sends.
+    const payload: ChangeProposal = { ...change };
+    if (change.parameters !== undefined)
+      payload.parameters = { ...change.parameters };
+    if (change.input !== undefined) payload.input = { ...change.input };
+    if (change.cited_files !== undefined)
+      payload.cited_files = change.cited_files.map((file) =>
+        file !== null && typeof file === "object" ? { ...file } : file,
+      );
+    for (const file of payload.cited_files ?? []) {
+      if (
+        file === null ||
+        typeof file !== "object" ||
+        typeof file.repository_id !== "string" ||
+        file.repository_id === "" ||
+        typeof file.path !== "string" ||
+        file.path === "" ||
+        typeof file.commit_sha !== "string" ||
+        !COMMIT_SHA.test(file.commit_sha)
+      )
+        throw new TypeError(
+          "cited_files entries need a nonempty repository_id, a nonempty path and a full commit SHA",
+        );
     }
-    return this.call("propose_change", { ...change, request_id: requestId() });
+    return this.call("propose_change", { ...payload, request_id: requestId() });
   }
   applyChange(
     changeId: string,
