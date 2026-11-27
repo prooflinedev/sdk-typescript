@@ -15,6 +15,7 @@ export interface ProblemFields {
   title?: string;
   refusal?: RunNowRefusal;
   repositoryName?: string;
+  requestId?: string;
 }
 
 export class SecretToken {
@@ -92,6 +93,11 @@ export class ProoflineError extends Error {
   /** The refused repository's name within its owner. */
   get repositoryName(): string | undefined {
     return this.#fields.repositoryName;
+  }
+
+  /** The request ID of a failed scan; repeating it reads the first resolution. */
+  get requestId(): string | undefined {
+    return this.#fields.requestId;
   }
 
   toJSON(): { status: number } {
@@ -437,6 +443,9 @@ export class Transport {
       JSON.parse(text),
     accept = "application/json, application/problem+json",
     mcpPhase?: "initialize" | "notification" | "call",
+    // The server answers a repeated request ID with its first resolution, so a
+    // mutation that carries one may be resent with the same body.
+    idempotent = false,
   ): Promise<T> {
     const path = Object.entries(parameters.path ?? {}).reduce(
       (value, [key, coordinateValue]) =>
@@ -497,6 +506,10 @@ export class Transport {
             "urn:proofline:sdk:timeout",
             "the review wait deadline expired",
           );
+        if (idempotent && attempt < MAX_RETRIES) {
+          await sleep(retryDelay(null, attempt) ?? 0);
+          continue;
+        }
         throw new ProoflineError(
           0,
           "urn:proofline:sdk:transport",
@@ -532,7 +545,7 @@ export class Transport {
       const error = problem(response.status, value, this.#token);
       const delay = retryDelay(response.headers.get("Retry-After"), attempt);
       if (
-        method !== "GET" ||
+        (method !== "GET" && !idempotent) ||
         ![429, 503].includes(response.status) ||
         attempt >= MAX_RETRIES ||
         delay === undefined

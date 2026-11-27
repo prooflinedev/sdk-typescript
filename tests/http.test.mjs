@@ -606,6 +606,147 @@ test("reads honor bounded Retry-After and mutations make one attempt", async (t)
   }
 });
 
+const scanResolution = {
+  resolution_id: "00000000-0000-7000-8000-000000000006",
+  outcome: "CREATED",
+  review_id: reviewId,
+};
+const uuid =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
+test("scans send one generated request ID with the caller's body", async (t) => {
+  const fixture = await server(t, (_, response) =>
+    json(response, 200, scanResolution),
+  );
+  const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
+  const resolution = await client.scanRevision(
+    { path: { org_id: orgId, repo_id: repoId } },
+    { ref: "main", budget_credits: 200 },
+  );
+  assert.deepEqual(resolution, scanResolution);
+  assert.equal(fixture.calls.length, 1);
+  const call = fixture.calls[0];
+  assert.equal(call.method, "POST");
+  assert.equal(
+    call.url,
+    `/api/v1/organizations/${orgId}/repositories/${repoId}/scans`,
+  );
+  const sent = JSON.parse(call.body);
+  assert.match(sent.request_id, uuid);
+  assert.deepEqual(
+    { ...sent, request_id: undefined },
+    { ref: "main", budget_credits: 200, request_id: undefined },
+  );
+});
+
+test("scans keep a caller's request ID", async (t) => {
+  const requestId = "00000000-0000-4000-8000-000000000007";
+  const fixture = await server(t, (_, response) =>
+    json(response, 200, { ...scanResolution, outcome: "EXISTING" }),
+  );
+  const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
+  const resolution = await client.scanRevision(
+    { path: { org_id: orgId, repo_id: repoId } },
+    { request_id: requestId, commit_sha: "a".repeat(40), budget_credits: 5 },
+  );
+  assert.equal(resolution.outcome, "EXISTING");
+  assert.equal(JSON.parse(fixture.calls[0].body).request_id, requestId);
+});
+
+test("scans retry 429 and 503 under one request ID and body", async (t) => {
+  for (const status of [429, 503]) {
+    await t.test(`${status}`, async (t) => {
+      const fixture = await server(t, (_, response, calls) =>
+        calls.length < 3
+          ? json(response, status, { detail: "busy" }, { "Retry-After": "0" })
+          : json(response, 200, scanResolution),
+      );
+      const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
+      const resolution = await client.scanRevision(
+        { path: { org_id: orgId, repo_id: repoId } },
+        { ref: "main", budget_credits: 200 },
+      );
+      assert.deepEqual(resolution, scanResolution);
+      assert.equal(fixture.calls.length, 3);
+      assert.equal(new Set(fixture.calls.map((call) => call.body)).size, 1);
+    });
+  }
+});
+
+test("scans retry a lost response under the same request ID", async (t) => {
+  const fixture = await server(t, (request, response, calls) => {
+    if (calls.length === 1) return request.socket.destroy();
+    json(response, 200, { ...scanResolution, outcome: "EXISTING" });
+  });
+  const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
+  const resolution = await client.scanRevision(
+    { path: { org_id: orgId, repo_id: repoId } },
+    { ref: "main", budget_credits: 200 },
+  );
+  assert.equal(resolution.outcome, "EXISTING");
+  assert.equal(fixture.calls.length, 2);
+  assert.equal(fixture.calls[0].body, fixture.calls[1].body);
+  assert(fixture.calls[1].at - fixture.calls[0].at >= 900);
+});
+
+test("a scan's error names the request ID to repeat", async (t) => {
+  const fixture = await server(t, (request, response) =>
+    request.url.includes("refused")
+      ? json(response, 400, { title: "invalid request", detail: "limit is 0" })
+      : json(response, 503, { detail: "busy" }, { "Retry-After": "0" }),
+  );
+  const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
+  for (const [repo, status, attempts] of [
+    [repoId, 503, 4],
+    ["refused", 400, 1],
+  ]) {
+    const before = fixture.calls.length;
+    await assert.rejects(
+      client.scanRevision(
+        { path: { org_id: orgId, repo_id: repo } },
+        { ref: "main", budget_credits: 200 },
+      ),
+      (error) => {
+        assert(error instanceof ProoflineError);
+        assert.equal(error.status, status);
+        assert.equal(
+          error.requestId,
+          JSON.parse(fixture.calls.at(-1).body).request_id,
+        );
+        return true;
+      },
+    );
+    assert.equal(fixture.calls.length - before, attempts);
+  }
+  const other = new ProoflineError(500, "about:blank", "unrelated");
+  assert.equal(other.requestId, undefined);
+});
+
+test("the generated scan request and other mutations still make one attempt after a lost response", async (t) => {
+  const fixture = await server(t, (request) => request.socket.destroy());
+  const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
+  await assert.rejects(
+    client.requestScan(
+      { path: { org_id: orgId, repo_id: repoId } },
+      {
+        request_id: "00000000-0000-4000-8000-000000000008",
+        ref: "main",
+        budget_credits: 200,
+      },
+    ),
+    (error) =>
+      error instanceof ProoflineError &&
+      error.type === "urn:proofline:sdk:transport",
+  );
+  await assert.rejects(
+    client.rerunReview({ path: { org_id: orgId, review_id: reviewId } }),
+    (error) =>
+      error instanceof ProoflineError &&
+      error.type === "urn:proofline:sdk:transport",
+  );
+  assert.equal(fixture.calls.length, 2);
+});
+
 const invalidUtf8Body = Buffer.concat([
   Buffer.from(`<html>${responseCanary} ${token}`),
   Buffer.from([0xff]),
