@@ -19,6 +19,17 @@ When no token is passed, the client reads `PROOFLINE_TOKEN`, keeps it in memory,
 
 This repository is the published distribution of the Proofline TypeScript SDK. The public OpenAPI contract in `openapi.public.json` generates `src/operations.ts` and `src/schema.d.ts`. The transport in `src/transport.ts`, client helpers, and tests in `tests/` are hand-written. Open an [issue](https://github.com/prooflinedev/sdk-typescript/issues) for changes to the OpenAPI contract, generated code, or workflows. Pull requests are welcome for the hand-written parts.
 
+## Review snapshots
+
+`getReviewSnapshot` reads a review once and reports the same status and gaps as `waitForReview`, without polling. Use it in a status page or an editor panel that refreshes on its own schedule. An active review reports `PENDING` or `RUNNING`. A settled review reports `COMPLETED`, `INCOMPLETE`, `FAILED` or `STOPPED`, with the assessment gaps that explain an incomplete result. The read uses the normal request timeout and retries; it never returns `TIMED_OUT`.
+
+```typescript
+const snapshot = await client.getReviewSnapshot(organizationId, reviewId);
+console.log(snapshot.status);
+for (const gap of snapshot.gaps)
+  console.log(gap.assessmentId, gap.reasonCodes.join(", "));
+```
+
 ## Errors and refusals
 
 A refused request throws `ProoflineError` with the server problem's `status`, `type`, `title` and `detail`. When a review request creates nothing, the error also carries `refusal`, whose `reason` names the setting to change, such as `NO_LINKED_ENVIRONMENT` or `ENVIRONMENT_NOT_READY`, and `repositoryName`. A refusal that does not match the public contract keeps its status, `title` and `detail` with the type `urn:proofline:sdk:invalid-response` and no `refusal`. Any other status, such as the 402 a review request answers when credits cannot pay, is a plain problem with no `refusal`. The token is redacted from every text field, and `String(error)`, `inspect(error)` and `JSON.stringify(error)` show only the status.
