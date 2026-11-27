@@ -2206,7 +2206,11 @@ test("a review snapshot reports the wait outcome from one read, without polling"
       item.outcome === null ? body.status : item.outcome,
       item.name,
     );
-    if (item.outcome !== null) {
+    if (item.outcome === null) {
+      // An active review reports no gaps and no reason; progress is not a gap.
+      assert.deepEqual(snapshot.gaps, [], item.name);
+      assert.equal(snapshot.reason, null, item.name);
+    } else {
       assert.deepEqual(
         snapshot.gaps.map((gap) => ({
           assessment_id: gap.assessmentId || null,
@@ -2215,6 +2219,15 @@ test("a review snapshot reports the wait outcome from one read, without polling"
         item.gaps,
         item.name,
       );
+      const expectedReason =
+        item.outcome === "INCOMPLETE"
+          ? body.assessment_count === 0 && body.assessments.length === 0
+            ? "the code assessment is unavailable or incomplete"
+            : body.status !== "INCOMPLETE"
+              ? "one or more assessment results are unavailable or unknown"
+              : null
+          : null;
+      assert.equal(snapshot.reason, expectedReason, item.name);
     }
   }
 

@@ -301,10 +301,21 @@ export class ProoflineClient extends Operations {
     );
     validateReview(review, reviewId);
     const settled = terminal(review);
-    // `terminal` returns null only for the two active states.
-    const status = settled ?? (review.status as "PENDING" | "RUNNING");
-    const reason = settled === null ? null : settledReason(review, settled);
-    return { ...outcome(status, url, review, reason), review };
+    // An active review is still in progress; its unfinished assessments are
+    // normal, not gaps. Report no gaps until the review settles.
+    if (settled === null) {
+      return {
+        status: review.status as "PENDING" | "RUNNING",
+        reviewUrl: url,
+        review,
+        gaps: [],
+        reason: null,
+      };
+    }
+    return {
+      ...outcome(settled, url, review, settledReason(review, settled)),
+      review,
+    };
   }
 }
 
