@@ -2714,6 +2714,21 @@ test("config and setup MCP clients forward selectors, validate locally and keep 
     /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
   );
 
+  // An own "__proto__" data field is preserved as data, not swallowed by the
+  // inherited setter on the copy target.
+  const protoChange = JSON.parse(
+    '{"operation":"environment.review_focus.update","__proto__":{"kept":true}}',
+  );
+  protoChange.organization_id = orgId;
+  const beforeProto = observed.length;
+  await client.config.proposeChange(protoChange);
+  assert.equal(observed.length, beforeProto + 1);
+  assert.deepEqual(
+    Object.getOwnPropertyDescriptor(observed.at(-1).arguments, "__proto__")
+      .value,
+    { kept: true },
+  );
+
   // apply_change forwards the UUID and the per-call organization.
   const beforeApply = observed.length;
   await client.config.applyChange(reviewId, { organization_id: orgId });
@@ -2739,6 +2754,20 @@ test("config and setup MCP clients forward selectors, validate locally and keep 
         operation: "x",
         cited_files: [
           { repository_id: repoId, commit_sha: "short", path: "p" },
+        ],
+      }),
+    () =>
+      client.config.proposeChange({
+        operation: "x",
+        cited_files: [
+          { repository_id: repoId, commit_sha: "g".repeat(40), path: "p" },
+        ],
+      }),
+    () =>
+      client.config.proposeChange({
+        operation: "x",
+        cited_files: [
+          { repository_id: repoId, commit_sha: "z".repeat(64), path: "p" },
         ],
       }),
     () =>

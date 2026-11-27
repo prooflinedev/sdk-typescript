@@ -95,7 +95,9 @@ export class ConfigClient extends McpTools {
     // reading a caller-supplied request_id, then snapshot the exact JSON payload
     // before the first asynchronous step. Getters and later caller edits,
     // including edits to nested values, cannot change what this request sends.
-    const source: Record<string, unknown> = {};
+    // A null-prototype target keeps an own "__proto__" field as data instead of
+    // invoking the inherited setter.
+    const source: Record<string, unknown> = Object.create(null);
     for (const key of Object.keys(change)) {
       if (key !== "request_id") source[key] = change[key];
     }
