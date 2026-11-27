@@ -75,6 +75,8 @@ export interface ReviewOutcome {
 
 export interface WaitOptions {
   timeoutMs?: number;
+  /** Only accept a result for this exact head commit (a full 40 or 64 character hexadecimal SHA). */
+  headCommitSha?: string;
 }
 
 export class ProoflineClient extends Operations {
@@ -219,6 +221,11 @@ export class ProoflineClient extends Operations {
     const timeout = options.timeoutMs ?? 20 * 60_000;
     if (!Number.isFinite(timeout) || timeout < 0)
       throw new TypeError("timeoutMs must be finite and nonnegative");
+    const headCommitSha = options.headCommitSha;
+    if (!validHeadCommit(headCommitSha))
+      throw new TypeError(
+        "headCommitSha must be a full 40 or 64 character hexadecimal SHA",
+      );
     const deadline = performance.now() + timeout;
     const url = this.#transport.reviewUrl(orgId, reviewId);
     let review: Review | null = null;
@@ -263,20 +270,25 @@ export class ProoflineClient extends Operations {
         throw error;
       }
       validateReview(review, reviewId);
+      const gap = headGap(review, headCommitSha);
+      if (gap === "HEAD_COMMIT_MISMATCH")
+        return outcome("INCOMPLETE", url, review, HEAD_REASONS[gap], gap);
       const status = terminal(review);
       if (status !== null)
-        return outcome(
-          status,
-          url,
-          review,
-          status === "INCOMPLETE"
-            ? review.assessment_count === 0 && review.assessments.length === 0
-              ? "the code assessment is unavailable or incomplete"
-              : review.status !== "INCOMPLETE"
-                ? "one or more assessment results are unavailable or unknown"
-                : null
-            : null,
-        );
+        return gap === null
+          ? outcome(
+              status,
+              url,
+              review,
+              status === "INCOMPLETE" ? incompleteReason(review) : null,
+            )
+          : outcome(
+              status === "COMPLETED" ? "INCOMPLETE" : status,
+              url,
+              review,
+              HEAD_REASONS[gap],
+              gap,
+            );
       await sleep(
         Math.min(interval, Math.max(0, deadline - performance.now())),
       );
@@ -300,6 +312,42 @@ function integerLimit(value: number, name: string): number {
   if (!Number.isSafeInteger(value) || value <= 0)
     throw new TypeError(`${name} must be a positive integer`);
   return value;
+}
+
+const HEAD_REASONS = {
+  HEAD_COMMIT_MISMATCH: "The review is pinned to another head commit.",
+  HEAD_COMMIT_UNAVAILABLE: "The review names no head commit.",
+} as const;
+
+type HeadGap = keyof typeof HEAD_REASONS;
+
+function validHeadCommit(value: unknown): value is string | undefined {
+  return (
+    value === undefined ||
+    (typeof value === "string" &&
+      (value.length === 40 || value.length === 64) &&
+      /^[0-9a-f]+$/i.test(value))
+  );
+}
+
+function headGap(
+  review: Review,
+  headCommitSha: string | undefined,
+): HeadGap | null {
+  if (headCommitSha === undefined) return null;
+  const head = review.head_commit_sha;
+  if (typeof head !== "string" || head === "") return "HEAD_COMMIT_UNAVAILABLE";
+  return head.toLowerCase() === headCommitSha.toLowerCase()
+    ? null
+    : "HEAD_COMMIT_MISMATCH";
+}
+
+function incompleteReason(review: Review): string | null {
+  if (review.assessment_count === 0 && review.assessments.length === 0)
+    return "the code assessment is unavailable or incomplete";
+  if (review.status !== "INCOMPLETE")
+    return "one or more assessment results are unavailable or unknown";
+  return null;
 }
 
 const COMPLETE_CHECKS = new Set(["READY", "BLOCKED", "NOT_APPLICABLE"]);
@@ -504,6 +552,7 @@ function outcome(
   reviewUrl: string,
   review: Review | null,
   reason: string | null,
+  gap: HeadGap | null = null,
 ): ReviewOutcome {
   const gaps: AssessmentGaps[] = (review?.assessments ?? [])
     .filter(
@@ -596,6 +645,16 @@ function outcome(
       status: review.status,
       incompletenessKind: null,
       reasonCodes: ["REVIEW_STATE_UNAVAILABLE"],
+      releaseEvidenceGap: null,
+      checks: [],
+    });
+  }
+  if (gap !== null) {
+    gaps.push({
+      assessmentId: "",
+      status: "UNKNOWN",
+      incompletenessKind: null,
+      reasonCodes: [gap],
       releaseEvidenceGap: null,
       checks: [],
     });

@@ -1144,6 +1144,72 @@ test("export reads retry non-JSON refusals independently of the successful forma
   }
 });
 
+test("waitForReview pins outcomes to the requested head commit", async (t) => {
+  const head = "a".repeat(40);
+  const other = "b".repeat(40);
+  let body = { ...review("COMPLETED"), head_commit_sha: head };
+  const fixture = await server(t, (_, response) => json(response, 200, body));
+  const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
+
+  const matched = await client.waitForReview(orgId, reviewId, {
+    headCommitSha: head.toUpperCase(),
+  });
+  assert.equal(matched.status, "COMPLETED");
+  assert.deepEqual(matched.gaps, []);
+
+  body = { ...review("COMPLETED"), head_commit_sha: other };
+  const mismatch = await client.waitForReview(orgId, reviewId, {
+    headCommitSha: head,
+  });
+  assert.equal(mismatch.status, "INCOMPLETE");
+  assert.equal(mismatch.reason, "The review is pinned to another head commit.");
+  assert.deepEqual(mismatch.gaps.at(-1).reasonCodes, ["HEAD_COMMIT_MISMATCH"]);
+
+  body = { ...review("RUNNING"), head_commit_sha: other };
+  const before = fixture.calls.length;
+  const endsOnRead = await client.waitForReview(orgId, reviewId, {
+    headCommitSha: head,
+  });
+  assert.equal(endsOnRead.status, "INCOMPLETE");
+  assert.equal(fixture.calls.length - before, 1);
+
+  body = review("RUNNING");
+  const waiting = await client.waitForReview(orgId, reviewId, {
+    headCommitSha: head,
+    timeoutMs: 80,
+  });
+  assert.equal(waiting.status, "TIMED_OUT");
+  assert.equal(waiting.review.status, "RUNNING");
+  assert.deepEqual(waiting.gaps, []);
+
+  body = review("COMPLETED");
+  const unavailable = await client.waitForReview(orgId, reviewId, {
+    headCommitSha: head,
+  });
+  assert.equal(unavailable.status, "INCOMPLETE");
+  assert.equal(unavailable.reason, "The review names no head commit.");
+  assert.deepEqual(unavailable.gaps.at(-1).reasonCodes, [
+    "HEAD_COMMIT_UNAVAILABLE",
+  ]);
+
+  const longHead = "c".repeat(64);
+  body = { ...review("COMPLETED"), head_commit_sha: longHead };
+  const longMatched = await client.waitForReview(orgId, reviewId, {
+    headCommitSha: longHead,
+  });
+  assert.equal(longMatched.status, "COMPLETED");
+
+  for (const value of ["", "abcd", "g".repeat(40), "a".repeat(39), 123, null]) {
+    const beforeCalls = fixture.calls.length;
+    await assert.rejects(
+      client.waitForReview(orgId, reviewId, { headCommitSha: value }),
+      (error) =>
+        error instanceof TypeError && /headCommitSha/.test(error.message),
+    );
+    assert.equal(fixture.calls.length, beforeCalls);
+  }
+});
+
 test("waiting retains assessment gaps, unknown states and unresolved checks without inferring from findings", async (t) => {
   let body = review("INCOMPLETE", [
     {
