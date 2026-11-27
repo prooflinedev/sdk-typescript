@@ -2602,7 +2602,7 @@ test("config and setup MCP clients forward selectors, validate locally and keep 
   const mutable = {
     operation: "environment.review_focus.update",
     parameters: { env_id: reviewId },
-    input: { focus: "production" },
+    input: { focus: "production", nested: { value: "original" } },
     cited_files: [
       {
         repository_id: repoId,
@@ -2617,13 +2617,53 @@ test("config and setup MCP clients forward selectors, validate locally and keep 
   });
   mutable.parameters.env_id = "tampered";
   mutable.input.focus = "tampered";
+  mutable.input.nested.value = "tampered";
   mutable.cited_files[0].path = "";
   mutable.cited_files[0] = null;
   await pending;
   const sent = observed.at(-1).arguments;
   assert.equal(sent.parameters.env_id, reviewId);
   assert.equal(sent.input.focus, "production");
+  assert.deepEqual(sent.input.nested, { value: "original" });
   assert.deepEqual(sent.cited_files, [
+    {
+      repository_id: repoId,
+      commit_sha: "b".repeat(40),
+      path: "infra/main.tf",
+    },
+  ]);
+
+  // A getter must not supply one value to validation and another to the
+  // request. Each field is read once, before any asynchronous step.
+  let queryReads = 0;
+  const trickyQuery = {
+    organization_id: orgId,
+    get query() {
+      queryReads += 1;
+      return queryReads === 1 ? "api" : "x".repeat(200);
+    },
+  };
+  await client.setup.listCandidates(trickyQuery);
+  assert.equal(observed.at(-1).arguments.query, "api");
+  let citationReads = 0;
+  const trickyChange = {
+    operation: "environment.review_focus.update",
+    organization_id: orgId,
+    get cited_files() {
+      citationReads += 1;
+      return citationReads === 1
+        ? [
+            {
+              repository_id: repoId,
+              commit_sha: "b".repeat(40),
+              path: "infra/main.tf",
+            },
+          ]
+        : [{ repository_id: repoId, commit_sha: "short", path: "p" }];
+    },
+  };
+  await client.config.proposeChange(trickyChange);
+  assert.deepEqual(observed.at(-1).arguments.cited_files, [
     {
       repository_id: repoId,
       commit_sha: "b".repeat(40),
@@ -2683,6 +2723,10 @@ test("config and setup MCP clients forward selectors, validate locally and keep 
           { repository_id: repoId, commit_sha: "short", path: "p" },
         ],
       }),
+    () => client.config.proposeChange({ operation: "x", input: null }),
+    () => client.config.proposeChange({ operation: "x", input: [1] }),
+    () => client.config.proposeChange({ operation: "x", input: "text" }),
+    () => client.config.proposeChange({ operation: "x", input: 7 }),
     () => client.config.applyChange("not-a-uuid"),
     () => client.setup.listCandidates({ query: "" }),
     () => client.setup.listCandidates({ query: "x".repeat(101) }),
@@ -2769,18 +2813,23 @@ export async function use(client: ProoflineClient): Promise<void> {
     client.fixes.getReverification("request-id", target),
     client.config.getConfiguration(),
     client.config.getConfiguration(selector),
+    client.config.getConfiguration({ environment_id: "environment-id", repository: "owner/name", organization_id: "org-id" }),
     client.config.listOperations(),
     client.config.listOperations(filter),
+    client.config.listOperations({ area: "REPOSITORY_REVIEW_SETTINGS", subject: "repository", organization_id: "org-id" }),
     client.config.describeOperation({ operation: "organization.settings.update" }),
     client.config.describeOperation(describe),
+    client.config.describeOperation({ operation: "repository.wiki_settings.update", parameters: { repo_id: "repo-slug" }, organization_id: "org-id" }),
     client.config.proposeChange({ operation: "repository.wiki_settings.update", input: { enabled: true } }),
     client.config.proposeChange(proposal),
+    client.config.proposeChange({ operation: "environment.review_focus.update", parameters: { env_id: "environment-id" }, input: { focus: "production" }, expected_revision: "a".repeat(64), cited_files: [{ repository_id: "repo-id", commit_sha: "b".repeat(40), path: "infra/main.tf" }], organization_id: "org-id" }),
     client.config.applyChange("00000000-0000-7000-8000-000000000002"),
     client.config.applyChange("00000000-0000-7000-8000-000000000002", target),
     client.setup.getStatus(),
     client.setup.getStatus(target),
     client.setup.listCandidates(),
     client.setup.listCandidates(candidates),
+    client.setup.listCandidates({ query: "api", organization_id: "org-id" }),
   ]);
   console.log(results);
 }

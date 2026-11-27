@@ -70,49 +70,71 @@ export class ConfigClient extends McpTools {
     return this.call("list_operations", { ...filter });
   }
   describeOperation(args: DescribeOperationRequest): Promise<KnowledgeResult> {
-    if (typeof args.operation !== "string" || args.operation === "")
+    const operation = args.operation;
+    const rawParameters = args.parameters;
+    if (typeof operation !== "string" || operation === "")
       throw new TypeError("operation must be a nonempty string");
-    if (args.parameters !== undefined)
-      stringRecord(args.parameters, "parameters");
+    if (
+      rawParameters !== undefined &&
+      (rawParameters === null ||
+        typeof rawParameters !== "object" ||
+        Array.isArray(rawParameters))
+    )
+      throw new TypeError("parameters must be an object with string values");
+    const parameters = rawParameters === undefined ? {} : { ...rawParameters };
+    stringRecord(parameters, "parameters");
     return this.call("describe_operation", {
-      operation: args.operation,
-      parameters: { ...args.parameters },
+      operation,
+      parameters,
       organization_id: args.organization_id,
     });
   }
   /** Proposes a change without applying it; each call carries a fresh request_id. */
   proposeChange(change: ChangeProposal): Promise<KnowledgeResult> {
-    if (typeof change.operation !== "string" || change.operation === "")
+    // Snapshot the exact JSON payload before the first asynchronous step.
+    // Each getter is read once, and later caller edits, including edits to
+    // nested values, cannot change what this request sends.
+    let payload: ChangeProposal;
+    try {
+      payload = JSON.parse(JSON.stringify(change)) as ChangeProposal;
+    } catch {
+      throw new TypeError("change must be a JSON-serializable object");
+    }
+    if (
+      payload === null ||
+      typeof payload !== "object" ||
+      Array.isArray(payload)
+    )
+      throw new TypeError("change must be an object");
+    if (typeof payload.operation !== "string" || payload.operation === "")
       throw new TypeError("operation must be a nonempty string");
-    if (change.parameters !== undefined)
-      stringRecord(change.parameters, "parameters");
-    if (change.cited_files !== undefined && !Array.isArray(change.cited_files))
-      throw new TypeError("cited_files must be an array");
-    // Snapshot the payload before validation. Protocol negotiation yields to
-    // the caller, and later edits to the original objects must not change
-    // what this request sends.
-    const payload: ChangeProposal = { ...change };
-    if (change.parameters !== undefined)
-      payload.parameters = { ...change.parameters };
-    if (change.input !== undefined) payload.input = { ...change.input };
-    if (change.cited_files !== undefined)
-      payload.cited_files = change.cited_files.map((file) =>
-        file !== null && typeof file === "object" ? { ...file } : file,
-      );
-    for (const file of payload.cited_files ?? []) {
-      if (
-        file === null ||
-        typeof file !== "object" ||
-        typeof file.repository_id !== "string" ||
-        file.repository_id === "" ||
-        typeof file.path !== "string" ||
-        file.path === "" ||
-        typeof file.commit_sha !== "string" ||
-        !COMMIT_SHA.test(file.commit_sha)
-      )
-        throw new TypeError(
-          "cited_files entries need a nonempty repository_id, a nonempty path and a full commit SHA",
-        );
+    if (payload.parameters !== undefined)
+      stringRecord(payload.parameters, "parameters");
+    if (
+      payload.input !== undefined &&
+      (payload.input === null ||
+        typeof payload.input !== "object" ||
+        Array.isArray(payload.input))
+    )
+      throw new TypeError("input must be an object");
+    if (payload.cited_files !== undefined) {
+      if (!Array.isArray(payload.cited_files))
+        throw new TypeError("cited_files must be an array");
+      for (const file of payload.cited_files) {
+        if (
+          file === null ||
+          typeof file !== "object" ||
+          typeof file.repository_id !== "string" ||
+          file.repository_id === "" ||
+          typeof file.path !== "string" ||
+          file.path === "" ||
+          typeof file.commit_sha !== "string" ||
+          !COMMIT_SHA.test(file.commit_sha)
+        )
+          throw new TypeError(
+            "cited_files entries need a nonempty repository_id, a nonempty path and a full commit SHA",
+          );
+      }
     }
     return this.call("propose_change", { ...payload, request_id: requestId() });
   }
