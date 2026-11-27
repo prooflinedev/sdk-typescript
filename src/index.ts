@@ -5,6 +5,14 @@ export type { ReverificationRequest } from "./fixes.js";
 import { type CoverageFilesUpload, readCoverageFiles } from "./coverage.js";
 
 export type { CoverageFile, CoverageFilesUpload } from "./coverage.js";
+export type {
+  EvidenceLinkUnavailableReason,
+  EvidenceRepositories,
+  EvidenceSourceLink,
+  LinkedEvidence,
+  UnlinkedEvidence,
+} from "./evidence-links.js";
+export { evidenceSourceLinks } from "./evidence-links.js";
 
 import { McpClient } from "./mcp.js";
 

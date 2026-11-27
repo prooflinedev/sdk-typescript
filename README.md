@@ -154,6 +154,45 @@ if (result.isError) throw new Error("Re-verification was refused.");
 
 The commit must be the live pushed head, which the server confirms. Each request accepts 1 to 20 distinct findings from one review and an optional note of 1 to 2,000 characters. Reads require `reviews:read`; requesting re-verification also requires `reviews:request` and repository write access. Calls never retry. Results retain untrusted-text wrappers, availability, assessment gaps, and `isError`. `PENDING` and `NOT_VERIFIED` do not establish a fix, and a tool request never records a human disposition.
 
+## Evidence source links
+
+`evidenceSourceLinks(finding, repositories)` turns the repository files a finding cites into GitHub permalinks pinned to the commit each reference read. It is a pure function: it makes no request and never changes its arguments. You name the repositories links may point into; the SDK never takes a repository from a label or URL.
+
+```typescript
+import { evidenceSourceLinks } from "@proofline/sdk";
+
+const review = await client.getReview({
+  path: { org_id: organizationId, review_id: reviewId },
+});
+const repositories = {
+  githubOrigin: review.repository_url
+    ? new URL(review.repository_url).origin
+    : configuredGithubOrigin,
+  repository: review.repository_full_name,
+  companions: review.subjects
+    .filter((subject) => subject.role === "COMPANION")
+    .flatMap((subject) => (subject.repository_full_name ? [subject.repository_full_name] : [])),
+};
+for (const finding of review.code_assessment?.findings ?? []) {
+  for (const link of evidenceSourceLinks(finding, repositories)) {
+    if (link.url !== null) console.log(link.url);
+    else console.log(`${link.evidence.label} (no link: ${link.reason})`);
+  }
+}
+```
+
+Set `configuredGithubOrigin` to the trusted GitHub web origin for your deployment. The example uses the review's repository URL when available. The same origin applies to the primary and companion repositories.
+
+The result has one entry per `evidence_refs` item, in recorded order, and each entry holds the original reference as `evidence`. A linked entry has `url`, `repository`, `commitSha`, `path`, `lines` and a null `reason`, with a URL such as `https://github.com/acme/app/blob/<commit>/src/app.ts#L10-L14`. Each path segment is percent-encoded, and Markdown line citations open in source view. An entry without a link has a null `url` and a `reason`. Any object with `evidence_refs` works, including a finding's `supporting_evidence`.
+
+- A `repository_file` reference links into `repository`. A `companion_repository_file` reference links only into a `companions` entry that matches its recorded `companion_repository`, ignoring case, and never into `repository`. Pass `githubOrigin` to link to a GitHub Enterprise Server host instead of `https://github.com`.
+- A link uses only the reference's own full 40-character `commit_sha` and `repository_path`, and only when `provenance_status` is `VERIFIED_REPOSITORY_READ`. The helper never falls back to the review's head, the pull request's current head, a branch, or the reference's own `url`. A reference without that provenance stays unlinked.
+- The reasons are `UNSUPPORTED_KIND`, `PROVENANCE_UNVERIFIED`, `REPOSITORY_MISSING`, `REPOSITORY_INVALID`, `REPOSITORY_AMBIGUOUS`, `COMMIT_MISSING`, `COMMIT_INVALID`, `PATH_MISSING`, `PATH_INVALID`, `LINES_INVALID` and `REPOSITORY_NOT_MAPPED`, checked in that order. `REPOSITORY_NOT_MAPPED` therefore means the reference would link once you supply its repository.
+- Commit, workflow run, text and other references, including kinds added later, are kept with `UNSUPPORTED_KIND`.
+- An invalid `repository`, `companions` entry or `githubOrigin` throws `TypeError` before any link is made.
+
+A link shows where the evidence was read. It does not confirm that the repository is visible to the reader, that the commit still exists on GitHub, or that the file matches `file_sha256`.
+
 ## Contributing and development
 
 The repository bundles its public API contract in `openapi.public.json`. New public operations generate typed methods on `ProoflineClient` from their OpenAPI operation IDs. To regenerate the client and verify changes locally, run `pnpm install --frozen-lockfile`, `pnpm generate`, `pnpm build`, `pnpm lint`, `pnpm typecheck`, and `pnpm test`.
