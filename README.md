@@ -70,6 +70,7 @@ const report = await client.uploadCoverageFiles(
 ```
 
 It throws a `TypeError` before sending anything when the SHA is abbreviated, the report count is outside 1 to 50, two reports share a name, a name escapes `root`, a file is not UTF-8 text, or the body would exceed 30 MiB. File system errors such as a missing report are thrown unchanged.
+Reports are read in bounded chunks, enforcing the JSON-encoded body limit during reading even if a file grows after the initial size check. The limit includes report names, JSON escaping, and all reports together; content, including a byte-order mark, is preserved.
 
 Send 1 to 50 LCOV, Cobertura XML, JaCoCo XML, or Go cover reports in a JSON body of at most 30 MiB. Each report name must be a unique relative path, and content must be the original report text. Repeating an identical upload returns the existing report with `created: false`. An upload receipt records evidence; it does not indicate that a coverage check is met.
 
