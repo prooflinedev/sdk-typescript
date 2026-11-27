@@ -1507,6 +1507,52 @@ test("the wait timeout includes an in-flight request and returns the retained re
   }
 });
 
+test("a successful body that finishes after the wait deadline returns TIMED_OUT", async (t) => {
+  let mode = "late";
+  let started;
+  let release;
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  const arrived = new Promise((resolve) => {
+    started = resolve;
+  });
+  const fixture = await server(t, async (_, response) => {
+    const body = JSON.stringify(review());
+    if (mode === "ontime") return json(response, 200, review());
+    response.writeHead(200, { "Content-Type": "application/json" });
+    response.write(body.slice(0, 10));
+    started();
+    await gate;
+    response.end(body.slice(10));
+  });
+  const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
+  const reviewUrl = `${fixture.baseUrl}/orgs/by-id/${orgId}/reviews/${reviewId}`;
+  // Advance the observed clock past the deadline while the body is in flight,
+  // before the native abort timer can fire, as on a stalled event loop.
+  let now = performance.now();
+  t.mock.method(performance, "now", () => now);
+  const waiting = client.waitForReview(orgId, reviewId, { timeoutMs: 1_000 });
+  await arrived;
+  now += 2_000;
+  release();
+  const late = await waiting;
+  assert.equal(late.status, "TIMED_OUT");
+  assert.equal(late.review.status, "COMPLETED");
+  assert.equal(late.reviewUrl, reviewUrl);
+  assert.equal(late.reason, "the review did not finish before timeoutMs");
+  assert.equal(fixture.calls.length, 1);
+
+  mode = "ontime";
+  now -= 2_000;
+  const onTime = await client.waitForReview(orgId, reviewId, {
+    timeoutMs: 1_000,
+  });
+  assert.equal(onTime.status, "COMPLETED");
+  assert.equal(onTime.reviewUrl, reviewUrl);
+  assert.equal(fixture.calls.length, 2);
+});
+
 test("pagination keeps filters and refuses cycles, incomplete metadata and resource bounds", async (t) => {
   let mode = "normal";
   const fixture = await server(t, (request, response) => {
