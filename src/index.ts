@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { FixesClient } from "./fixes.js";
 
 export type { ReverificationRequest } from "./fixes.js";
@@ -25,6 +26,8 @@ export type { ExportPage, ExportParameters } from "./exports.js";
 import {
   type ListReviewsParameters,
   Operations,
+  type RequestScanBody,
+  type RequestScanParameters,
   type UploadCoverageReportsParameters,
 } from "./operations.js";
 import type { components } from "./schema.js";
@@ -76,6 +79,11 @@ export interface ReviewOutcome {
 export interface WaitOptions {
   timeoutMs?: number;
 }
+
+/** A scan request whose `request_id` defaults to a new UUID. */
+export type ScanRevisionBody = Omit<RequestScanBody, "request_id"> & {
+  request_id?: string;
+};
 
 export class ProoflineClient extends Operations {
   readonly #transport: Transport;
@@ -160,6 +168,41 @@ export class ProoflineClient extends Operations {
       parameters,
       await readCoverageFiles(upload),
     );
+  }
+
+  /**
+   * Requests a scan and resends it under the same request ID after a 429, a
+   * 503 or a lost response, so a retry reads the first resolution instead of
+   * paying for a second scan. A thrown `ProoflineError` carries `requestId`.
+   */
+  async scanRevision(
+    parameters: RequestScanParameters,
+    body: ScanRevisionBody,
+  ): Promise<components["schemas"]["ScanResponse"]> {
+    const request = { ...body, request_id: body.request_id ?? randomUUID() };
+    try {
+      return await this.#transport.request(
+        "POST",
+        "/api/v1/organizations/{org_id}/repositories/{repo_id}/scans",
+        parameters,
+        undefined,
+        request,
+        undefined,
+        undefined,
+        undefined,
+        true,
+      );
+    } catch (error) {
+      if (!(error instanceof ProoflineError)) throw error;
+      throw new ProoflineError(error.status, error.type, error.detail, {
+        ...(error.title === undefined ? {} : { title: error.title }),
+        ...(error.refusal === undefined ? {} : { refusal: error.refusal }),
+        ...(error.repositoryName === undefined
+          ? {}
+          : { repositoryName: error.repositoryName }),
+        requestId: request.request_id,
+      });
+    }
   }
 
   async *iterReviews(
