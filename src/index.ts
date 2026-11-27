@@ -77,6 +77,18 @@ export interface WaitOptions {
   timeoutMs?: number;
 }
 
+/** A snapshot never times out on its own; a single read uses the request timeout. */
+export type SnapshotStatus =
+  | "PENDING"
+  | "RUNNING"
+  | Exclude<ReviewStatus, "TIMED_OUT">;
+
+export interface ReviewSnapshot
+  extends Omit<ReviewOutcome, "status" | "review"> {
+  status: SnapshotStatus;
+  review: Review;
+}
+
 export class ProoflineClient extends Operations {
   readonly #transport: Transport;
   readonly mcp: McpClient;
@@ -265,23 +277,45 @@ export class ProoflineClient extends Operations {
       validateReview(review, reviewId);
       const status = terminal(review);
       if (status !== null)
-        return outcome(
-          status,
-          url,
-          review,
-          status === "INCOMPLETE"
-            ? review.assessment_count === 0 && review.assessments.length === 0
-              ? "the code assessment is unavailable or incomplete"
-              : review.status !== "INCOMPLETE"
-                ? "one or more assessment results are unavailable or unknown"
-                : null
-            : null,
-        );
+        return outcome(status, url, review, settledReason(review, status));
       await sleep(
         Math.min(interval, Math.max(0, deadline - performance.now())),
       );
       interval = Math.min(interval * 2, 60_000);
     }
+  }
+
+  /**
+   * Reads a review once and reports the same status and gaps as `waitForReview`,
+   * without polling. An active review reports `PENDING` or `RUNNING`.
+   */
+  async getReviewSnapshot(
+    orgId: string,
+    reviewId: string,
+  ): Promise<ReviewSnapshot> {
+    const url = this.#transport.reviewUrl(orgId, reviewId);
+    const review = await this.#transport.request<Review>(
+      "GET",
+      "/api/v1/organizations/{org_id}/reviews/{review_id}",
+      { path: { org_id: orgId, review_id: reviewId } },
+    );
+    validateReview(review, reviewId);
+    const settled = terminal(review);
+    // An active review is still in progress; its unfinished assessments are
+    // normal, not gaps. Report no gaps until the review settles.
+    if (settled === null) {
+      return {
+        status: review.status as "PENDING" | "RUNNING",
+        reviewUrl: url,
+        review,
+        gaps: [],
+        reason: null,
+      };
+    }
+    return {
+      ...outcome(settled, url, review, settledReason(review, settled)),
+      review,
+    };
   }
 }
 
@@ -399,7 +433,16 @@ function checkGap(assessment: Assessment): boolean {
   );
 }
 
-function terminal(review: Review): ReviewStatus | null {
+function settledReason(review: Review, status: ReviewStatus): string | null {
+  if (status !== "INCOMPLETE") return null;
+  if (review.assessment_count === 0 && review.assessments.length === 0)
+    return "the code assessment is unavailable or incomplete";
+  return review.status !== "INCOMPLETE"
+    ? "one or more assessment results are unavailable or unknown"
+    : null;
+}
+
+function terminal(review: Review): Exclude<ReviewStatus, "TIMED_OUT"> | null {
   if (review.status === "PENDING" || review.status === "RUNNING") return null;
   if (review.status === "SUPERSEDED") return "STOPPED";
   if (
@@ -499,12 +542,12 @@ function assessmentReasons(assessment: Assessment): string[] {
   return reasons;
 }
 
-function outcome(
-  status: ReviewStatus,
+function outcome<S extends SnapshotStatus | "TIMED_OUT">(
+  status: S,
   reviewUrl: string,
   review: Review | null,
   reason: string | null,
-): ReviewOutcome {
+): Omit<ReviewOutcome, "status"> & { status: S } {
   const gaps: AssessmentGaps[] = (review?.assessments ?? [])
     .filter(
       (assessment) =>

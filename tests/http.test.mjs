@@ -2176,6 +2176,70 @@ test("shared review outcome contract", async (t) => {
   }
 });
 
+test("a review snapshot reports the wait outcome from one read, without polling", async (t) => {
+  const contract = JSON.parse(
+    await readFile(
+      new URL("./fixtures/review-outcomes.json", import.meta.url),
+      "utf8",
+    ),
+  );
+  let body;
+  let requests;
+  const fixture = await server(t, (_, response) => {
+    requests += 1;
+    json(response, 200, body);
+  });
+  const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
+  for (const item of contract.cases) {
+    body = item.review;
+    requests = 0;
+    const snapshot = await client.getReviewSnapshot(orgId, body.id);
+    assert.equal(requests, 1, item.name);
+    assert.equal(
+      snapshot.reviewUrl,
+      `${fixture.baseUrl}/orgs/by-id/${orgId}/reviews/${body.id}`,
+      item.name,
+    );
+    assert.deepEqual(snapshot.review, body, item.name);
+    assert.equal(
+      snapshot.status,
+      item.outcome === null ? body.status : item.outcome,
+      item.name,
+    );
+    if (item.outcome === null) {
+      // An active review reports no gaps and no reason; progress is not a gap.
+      assert.deepEqual(snapshot.gaps, [], item.name);
+      assert.equal(snapshot.reason, null, item.name);
+    } else {
+      assert.deepEqual(
+        snapshot.gaps.map((gap) => ({
+          assessment_id: gap.assessmentId || null,
+          reason_codes: gap.reasonCodes,
+        })),
+        item.gaps,
+        item.name,
+      );
+      const expectedReason =
+        item.outcome === "INCOMPLETE"
+          ? body.assessment_count === 0 && body.assessments.length === 0
+            ? "the code assessment is unavailable or incomplete"
+            : body.status !== "INCOMPLETE"
+              ? "one or more assessment results are unavailable or unknown"
+              : null
+          : null;
+      assert.equal(snapshot.reason, expectedReason, item.name);
+    }
+  }
+
+  body = { ...review(), id: "another-review" };
+  await assert.rejects(
+    client.getReviewSnapshot(orgId, reviewId),
+    (error) =>
+      error instanceof ProoflineError &&
+      error.type === "urn:proofline:sdk:invalid-response",
+  );
+});
+
 test("MCP helpers isolate per-call organizations and preserve refusals", async (t) => {
   const first = orgId;
   const second = "00000000-0000-7000-8000-000000000006";
