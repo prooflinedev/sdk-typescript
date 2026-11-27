@@ -168,7 +168,7 @@ const change = await client.config.proposeChange({
 if (change.isError) throw new Error("The proposal was refused.");
 ```
 
-`proposeChange` proposes without applying. Each call carries a fresh version 7 UUID `request_id`, as the CLI generates, and preserves every other field of the change object. It refuses a malformed `cited_files` entry locally: each entry needs a `repository_id`, a `path`, and a full 40 or 64 hexadecimal character `commit_sha`. `applyChange` takes the proposal's UUID `change_id`; a sensitive change can return `applied: false` with a browser `approval_url`, and the result keeps that answer unchanged. `listCandidates` accepts an optional `query` of 1 to 100 characters.
+`proposeChange` proposes without applying. Each call carries a fresh version 7 UUID `request_id`, as the CLI generates, and preserves every other field of the change object. It refuses a malformed `cited_files` entry locally: each entry needs a nonempty `repository_id`, a nonempty `path`, and a full 40 or 64 hexadecimal character `commit_sha`. `applyChange` takes the proposal's UUID `change_id`; a sensitive change can return `applied: false` with a browser `approval_url`, and the result keeps that answer unchanged. `listCandidates` accepts an optional `query` of 1 to 100 characters.
 
 The CLI signs in for these tools with `reviews:read`, `findings:read`, `guidance:read`, `reviews:request`, `setup:write`, and `org:configure`. The server enforces each tool's scopes; a missing scope retains the `NOT_AUTHORIZED` refusal. Calls never retry.
 

@@ -2583,6 +2583,20 @@ test("config and setup MCP clients forward selectors, validate locally and keep 
         operation: "x",
         cited_files: [{ repository_id: repoId, commit_sha: "b".repeat(40) }],
       }),
+    () =>
+      client.config.proposeChange({
+        operation: "x",
+        cited_files: [
+          { repository_id: "", commit_sha: "b".repeat(40), path: "p" },
+        ],
+      }),
+    () =>
+      client.config.proposeChange({
+        operation: "x",
+        cited_files: [
+          { repository_id: repoId, commit_sha: "b".repeat(40), path: "" },
+        ],
+      }),
     () => client.config.applyChange("not-a-uuid"),
     () => client.setup.listCandidates({ query: "" }),
     () => client.setup.listCandidates({ query: "x".repeat(101) }),
@@ -2592,14 +2606,17 @@ test("config and setup MCP clients forward selectors, validate locally and keep 
   assert.equal(observed.length, before);
 
   // A refused target keeps isError and the server code without retrying.
+  const beforeRefusals = observed.length;
   const refused = await client.config.getConfiguration({
     organization_id: "00000000-0000-7000-8000-000000000007",
   });
   assert.equal(refused.isError, true);
   assert.equal(refused.structuredContent.error.code, "NOT_AUTHORIZED");
+  assert.equal(observed.length, beforeRefusals + 1);
   const required = await client.setup.getStatus();
   assert.equal(required.isError, true);
   assert.equal(required.structuredContent.error.code, "ORGANIZATION_REQUIRED");
+  assert.equal(observed.length, beforeRefusals + 2);
 });
 
 test("public MCP types accept existing and targeted calls", async (t) => {

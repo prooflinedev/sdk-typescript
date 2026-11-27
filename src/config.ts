@@ -94,12 +94,14 @@ export class ConfigClient extends McpTools {
           file === null ||
           typeof file !== "object" ||
           typeof file.repository_id !== "string" ||
+          file.repository_id === "" ||
           typeof file.path !== "string" ||
+          file.path === "" ||
           typeof file.commit_sha !== "string" ||
           !COMMIT_SHA.test(file.commit_sha)
         )
           throw new TypeError(
-            "cited_files entries need a repository_id, a path and a full commit SHA",
+            "cited_files entries need a nonempty repository_id, a nonempty path and a full commit SHA",
           );
       }
     }
