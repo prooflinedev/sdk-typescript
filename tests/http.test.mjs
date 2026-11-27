@@ -2479,3 +2479,263 @@ export async function use(client: ProoflineClient): Promise<void> {
     fixture,
   ]);
 });
+
+test("AbortSignal cancels waitForReview before polling, during sleep, and mid-request without returning TIMED_OUT", async (t) => {
+  let mode = "pending";
+  let releaseSlowResponse = () => {};
+  const { baseUrl, calls } = await server(t, (request, response) => {
+    if (request.url.endsWith(`/reviews/${reviewId}`)) {
+      if (mode === "pending") return json(response, 200, review("RUNNING"));
+      if (mode === "slow-headers") {
+        const timer = setTimeout(() => {
+          if (!response.writableEnded) json(response, 200, review("COMPLETED"));
+        }, 5_000);
+        response.once("close", () => clearTimeout(timer));
+        return;
+      }
+      if (mode === "slow-body") {
+        response.writeHead(200, { "Content-Type": "application/json" });
+        response.write('{"id":');
+        const timer = setTimeout(() => {
+          if (!response.writableEnded) response.end("}");
+        }, 5_000);
+        releaseSlowResponse = () => {
+          clearTimeout(timer);
+          if (!response.writableEnded) response.destroy();
+        };
+        response.once("close", () => clearTimeout(timer));
+        return;
+      }
+    }
+    json(response, 404, { detail: "unexpected" });
+  });
+
+  const client = new ProoflineClient({ baseUrl, token });
+
+  // 1. Pre-aborted signal short-circuits before issuing any HTTP call, even with timeoutMs: 0.
+  const preAborted = new AbortController();
+  const customReason = new Error("caller cancelled upfront");
+  preAborted.abort(customReason);
+  await assert.rejects(
+    client.waitForReview(orgId, reviewId, {
+      timeoutMs: 0,
+      signal: preAborted.signal,
+    }),
+    (error) => error === customReason,
+  );
+  assert.equal(calls.length, 0);
+
+  // 2. Aborting while sleeping between poll intervals rejects promptly without waiting 5s.
+  mode = "pending";
+  const sleepAbort = new AbortController();
+  const sleepStart = performance.now();
+  const sleepTimer = setTimeout(() => sleepAbort.abort(), 35);
+  t.after(() => clearTimeout(sleepTimer));
+  await assert.rejects(
+    client.waitForReview(orgId, reviewId, {
+      timeoutMs: 10_000,
+      signal: sleepAbort.signal,
+    }),
+    (error) => error instanceof DOMException && error.name === "AbortError",
+  );
+  assert.ok(performance.now() - sleepStart < 1_000);
+  assert.equal(calls.length, 1);
+
+  // 3. Aborting mid-flight before headers arrive throws caller reason, not TIMED_OUT or transport error.
+  mode = "slow-headers";
+  const headerAbort = new AbortController();
+  const headerReason = new Error("headers aborted");
+  const headerTimer = setTimeout(() => headerAbort.abort(headerReason), 35);
+  t.after(() => clearTimeout(headerTimer));
+  await assert.rejects(
+    client.waitForReview(orgId, reviewId, {
+      timeoutMs: 10_000,
+      signal: headerAbort.signal,
+    }),
+    (error) => error === headerReason,
+  );
+  assert.equal(calls.length, 2);
+
+  // 4. Aborting mid-body stream rejects cleanly with caller reason, not invalid-response.
+  mode = "slow-body";
+  const bodyAbort = new AbortController();
+  const bodyReason = new Error("body stream aborted");
+  const bodyTimer = setTimeout(() => {
+    bodyAbort.abort(bodyReason);
+    releaseSlowResponse();
+  }, 35);
+  t.after(() => clearTimeout(bodyTimer));
+  await assert.rejects(
+    client.waitForReview(orgId, reviewId, {
+      timeoutMs: 10_000,
+      signal: bodyAbort.signal,
+    }),
+    (error) => error === bodyReason,
+  );
+  assert.equal(calls.length, 3);
+});
+
+test("AbortSignal cancels retry backoff sleeps, pagination generators, and exports", async (t) => {
+  const { baseUrl, calls } = await server(t, (request, response) => {
+    const url = new URL(request.url, "http://sdk.test");
+    if (url.pathname.includes("/exports/")) {
+      if (url.searchParams.get("retry") === "1") {
+        return json(
+          response,
+          429,
+          { detail: "slow down" },
+          { "Retry-After": "30" },
+        );
+      }
+      const cursor = url.searchParams.get("cursor");
+      response.writeHead(200, {
+        "Content-Type": "application/x-ndjson",
+        "x-proofline-export-version": "1",
+        "x-proofline-export-settled-until": "2026-10-25T00:00:00Z",
+        ...(cursor ? {} : { "x-proofline-export-next-cursor": "page-2" }),
+      });
+      return response.end(
+        `{"dataset_version":1,"page":"${cursor ?? "first"}"}\n`,
+      );
+    }
+    if (url.pathname.endsWith("/reviews")) {
+      const cursor = url.searchParams.get("cursor");
+      return json(response, 200, {
+        items: [{ id: cursor ?? "rev-1" }],
+        truncated: !cursor,
+        next_cursor: cursor ? null : "rev-2",
+      });
+    }
+    return json(response, 404, { detail: "not found" });
+  });
+
+  const client = new ProoflineClient({ baseUrl, token });
+
+  // 1. Retry-After backoff sleep aborts promptly without waiting 30s or issuing attempt 2.
+  const retryAbort = new AbortController();
+  const retryReason = new Error("retry sleep aborted");
+  const retryStart = performance.now();
+  const retryTimer = setTimeout(() => retryAbort.abort(retryReason), 35);
+  t.after(() => clearTimeout(retryTimer));
+  await assert.rejects(
+    client.exportReviews(
+      {
+        path: { org_id: orgId, dataset: "reviews" },
+        query: {
+          from: "2026-10-01T00:00:00Z",
+          to: "2026-10-25T00:00:00Z",
+          cursor: "retry",
+          retry: "1",
+        },
+      },
+      { signal: retryAbort.signal },
+    ),
+    (error) => error === retryReason,
+  );
+  assert.ok(performance.now() - retryStart < 1_000);
+  assert.equal(calls.length, 1);
+
+  // 2. Aborting iterExportPages after page 1 stops before fetching page 2.
+  const exportIterAbort = new AbortController();
+  const exportPages = [];
+  await assert.rejects(
+    (async () => {
+      for await (const page of client.iterExportPages(
+        {
+          path: { org_id: orgId, dataset: "reviews" },
+          query: {
+            from: "2026-10-01T00:00:00Z",
+            to: "2026-10-25T00:00:00Z",
+          },
+        },
+        { signal: exportIterAbort.signal },
+      )) {
+        exportPages.push(page.rows[0].page);
+        exportIterAbort.abort(new Error("stop export pagination"));
+      }
+    })(),
+    (error) => error.message === "stop export pagination",
+  );
+  assert.deepEqual(exportPages, ["first"]);
+  assert.equal(calls.length, 2);
+
+  // 3. Aborting iterReviews after yielding first page stops before fetching page 2.
+  const reviewIterAbort = new AbortController();
+  const yieldedReviews = [];
+  await assert.rejects(
+    (async () => {
+      for await (const item of client.iterReviews(
+        { path: { org_id: orgId } },
+        { signal: reviewIterAbort.signal },
+      )) {
+        yieldedReviews.push(item.id);
+        reviewIterAbort.abort(new Error("stop review pagination"));
+      }
+    })(),
+    (error) => error.message === "stop review pagination",
+  );
+  assert.deepEqual(yieldedReviews, ["rev-1"]);
+  assert.equal(calls.length, 3);
+
+  // 4. Non-AbortSignal values are rejected with TypeError before making requests.
+  await assert.rejects(
+    client.waitForReview(orgId, reviewId, { signal: "invalid" }),
+    (error) => error instanceof TypeError && /AbortSignal/.test(error.message),
+  );
+  assert.equal(calls.length, 3);
+});
+
+test("public cancellation types accept AbortSignal across client options", async (t) => {
+  const work = await mkdtemp(join(tmpdir(), "sdk-signal-types-"));
+  t.after(() => rm(work, { recursive: true, force: true }));
+  const entry = fileURLToPath(new URL("../dist/index.js", import.meta.url));
+  const fixture = join(work, "consumer.mts");
+  await writeFile(
+    fixture,
+    `
+import type {
+  IterExportPagesOptions,
+  IterReviewsOptions,
+  ProoflineClient,
+  RequestOptions,
+  WaitOptions,
+} from ${JSON.stringify(entry)};
+
+export async function use(client: ProoflineClient, signal: AbortSignal): Promise<void> {
+  const reqOpts: RequestOptions = { signal };
+  const waitOpts: WaitOptions = { timeoutMs: 1000, signal };
+  const exportOpts: IterExportPagesOptions = { maxPages: 5, signal };
+  const reviewOpts: IterReviewsOptions = { maxPages: 5, maxItems: 50, signal };
+  await client.waitForReview("org", "rev", waitOpts);
+  await client.exportReviews(
+    { path: { org_id: "org", dataset: "reviews" }, query: { from: "a", to: "b" } },
+    reqOpts,
+  );
+  for await (const page of client.iterExportPages(
+    { path: { org_id: "org", dataset: "reviews" }, query: { from: "a", to: "b" } },
+    exportOpts,
+  )) {
+    void page;
+  }
+  for await (const rev of client.iterReviews({ path: { org_id: "org" } }, reviewOpts)) {
+    void rev;
+  }
+}
+`,
+  );
+  execFileSync(process.execPath, [
+    fileURLToPath(
+      new URL("../node_modules/typescript/lib/tsc.js", import.meta.url),
+    ),
+    "--noEmit",
+    "--strict",
+    "--exactOptionalPropertyTypes",
+    "--target",
+    "ES2022",
+    "--module",
+    "NodeNext",
+    "--moduleResolution",
+    "NodeNext",
+    fixture,
+  ]);
+});

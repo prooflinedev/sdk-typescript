@@ -28,13 +28,21 @@ import {
   type UploadCoverageReportsParameters,
 } from "./operations.js";
 import type { components } from "./schema.js";
-import { type ClientOptions, sleep, Transport } from "./transport.js";
+import {
+  type ClientOptions,
+  type RequestOptions,
+  sleep,
+  Transport,
+  throwIfAborted,
+  validateAbortSignal,
+} from "./transport.js";
 
 export type * from "./operations.js";
 export type { components, operations, paths } from "./schema.js";
 export type {
   ClientOptions,
   ProblemFields,
+  RequestOptions,
   RunNowRefusal,
 } from "./transport.js";
 export { ProoflineError, SecretToken } from "./transport.js";
@@ -73,8 +81,16 @@ export interface ReviewOutcome {
   reason: string | null;
 }
 
-export interface WaitOptions {
+export interface WaitOptions extends RequestOptions {
   timeoutMs?: number;
+}
+
+export interface IterExportPagesOptions extends RequestOptions {
+  maxPages?: number;
+}
+
+export interface IterReviewsOptions extends IterExportPagesOptions {
+  maxItems?: number;
 }
 
 export class ProoflineClient extends Operations {
@@ -94,7 +110,12 @@ export class ProoflineClient extends Operations {
     this.fixes = new FixesClient(transport);
   }
 
-  async exportReviews(parameters: ExportParameters): Promise<ExportPage> {
+  async exportReviews(
+    parameters: ExportParameters,
+    options: RequestOptions = {},
+  ): Promise<ExportPage> {
+    const signal = validateAbortSignal(options.signal);
+    throwIfAborted(signal);
     const format = parameters.query.format ?? "ndjson";
     if (format !== "csv" && format !== "ndjson")
       throw new TypeError("export format must be csv or ndjson");
@@ -107,6 +128,8 @@ export class ProoflineClient extends Operations {
       (text, headers) =>
         decodeExport(text, headers, format, parameters.path.dataset),
       format === "csv" ? "text/csv" : "application/x-ndjson",
+      undefined,
+      signal,
     );
   }
 
@@ -118,8 +141,10 @@ export class ProoflineClient extends Operations {
    */
   async *iterExportPages(
     parameters: ExportParameters,
-    options: { maxPages?: number } = {},
+    options: IterExportPagesOptions = {},
   ): AsyncGenerator<ExportPage> {
+    const signal = validateAbortSignal(options.signal);
+    throwIfAborted(signal);
     const maxPages = options.maxPages ?? 100;
     if (!Number.isSafeInteger(maxPages) || maxPages < 1 || maxPages > 1_000)
       throw new TypeError("maxPages must be an integer from 1 to 1000");
@@ -129,11 +154,15 @@ export class ProoflineClient extends Operations {
     let cursor = query.cursor ?? null;
     const seen = new Set<string>(cursor === null ? [] : [cursor]);
     for (let index = 0; index < maxPages; index += 1) {
-      const page = await this.exportReviews({
-        ...parameters,
-        path,
-        query: { ...query, cursor },
-      });
+      throwIfAborted(signal);
+      const page = await this.exportReviews(
+        {
+          ...parameters,
+          path,
+          query: { ...query, cursor },
+        },
+        signal ? { signal } : {},
+      );
       if (page.nextCursor === null) {
         yield page;
         return;
@@ -155,28 +184,60 @@ export class ProoflineClient extends Operations {
   async uploadCoverageFiles(
     parameters: UploadCoverageReportsParameters,
     upload: CoverageFilesUpload,
+    options: RequestOptions = {},
   ): Promise<components["schemas"]["CoverageUploadResponse"]> {
-    return this.uploadCoverageReports(
-      parameters,
-      await readCoverageFiles(upload),
-    );
+    const signal = validateAbortSignal(options.signal);
+    throwIfAborted(signal);
+    const body = await readCoverageFiles(upload);
+    throwIfAborted(signal);
+    return signal
+      ? this.#transport.request<
+          components["schemas"]["CoverageUploadResponse"]
+        >(
+          "POST",
+          "/api/v1/organizations/{org_id}/repositories/{repo_id}/coverage-reports",
+          parameters,
+          undefined,
+          body,
+          undefined,
+          undefined,
+          undefined,
+          signal,
+        )
+      : this.uploadCoverageReports(parameters, body);
   }
 
   async *iterReviews(
     parameters: ListReviewsParameters,
-    options: { maxPages?: number; maxItems?: number } = {},
+    options: IterReviewsOptions = {},
   ): AsyncGenerator<components["schemas"]["ReviewSummary"]> {
+    const signal = validateAbortSignal(options.signal);
+    throwIfAborted(signal);
     const maxPages = integerLimit(options.maxPages ?? 100, "maxPages");
     const maxItems = integerLimit(options.maxItems ?? 10_000, "maxItems");
     const seen = new Set<string>();
     let count = 0;
     let cursor = parameters.query?.cursor;
     for (let index = 0; index < maxPages; index += 1) {
+      throwIfAborted(signal);
       const query = {
         ...parameters.query,
         ...(cursor === undefined ? {} : { cursor }),
       };
-      const page = await this.listReviews({ ...parameters, query });
+      const pageParameters = { ...parameters, query };
+      const page = signal
+        ? await this.#transport.request<components["schemas"]["ReviewPage"]>(
+            "GET",
+            "/api/v1/organizations/{org_id}/reviews",
+            pageParameters,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            signal,
+          )
+        : await this.listReviews(pageParameters);
       if (
         !isObject(page) ||
         !Array.isArray(page.items) ||
@@ -216,6 +277,8 @@ export class ProoflineClient extends Operations {
     reviewId: string,
     options: WaitOptions = {},
   ): Promise<ReviewOutcome> {
+    const signal = validateAbortSignal(options.signal);
+    throwIfAborted(signal);
     const timeout = options.timeoutMs ?? 20 * 60_000;
     if (!Number.isFinite(timeout) || timeout < 0)
       throw new TypeError("timeoutMs must be finite and nonnegative");
@@ -224,6 +287,7 @@ export class ProoflineClient extends Operations {
     let review: Review | null = null;
     let interval = 5_000;
     for (;;) {
+      throwIfAborted(signal);
       if (performance.now() >= deadline)
         return outcome(
           "TIMED_OUT",
@@ -237,8 +301,14 @@ export class ProoflineClient extends Operations {
           "/api/v1/organizations/{org_id}/reviews/{review_id}",
           { path: { org_id: orgId, review_id: reviewId } },
           deadline,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          signal,
         );
       } catch (error) {
+        throwIfAborted(signal);
         if (
           error instanceof ProoflineError &&
           error.type === "urn:proofline:sdk:timeout"
@@ -279,6 +349,7 @@ export class ProoflineClient extends Operations {
         );
       await sleep(
         Math.min(interval, Math.max(0, deadline - performance.now())),
+        signal,
       );
       interval = Math.min(interval * 2, 60_000);
     }
