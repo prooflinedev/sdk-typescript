@@ -1,4 +1,4 @@
-import { readFile, stat } from "node:fs/promises";
+import { open, stat } from "node:fs/promises";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import type { UploadCoverageReportsBody } from "./operations.js";
 
@@ -20,9 +20,11 @@ export interface CoverageFilesUpload {
 
 const MAX_REPORTS = 50;
 const MAX_BODY_BYTES = 30 * 1024 * 1024;
+const READ_BYTES = 64 * 1024;
 
-// Keeps a byte-order mark and refuses invalid UTF-8, so content stays the report text as written.
-const utf8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+function tooLarge(): never {
+  throw new TypeError("coverage reports exceed the 30 MiB upload limit");
+}
 
 function reportName(name: string): string {
   const segments = name.split("/");
@@ -48,7 +50,8 @@ function reportName(name: string): string {
 export async function readCoverageFiles(
   upload: CoverageFilesUpload,
 ): Promise<UploadCoverageReportsBody> {
-  if (!/^[0-9a-f]{40}$/i.test(upload.tested_sha))
+  const testedSha = upload.tested_sha;
+  if (!/^[0-9a-f]{40}$/i.test(testedSha))
     throw new TypeError("tested_sha must be a full 40-character commit SHA");
   if (upload.files.length < 1 || upload.files.length > MAX_REPORTS)
     throw new TypeError(`upload 1 to ${MAX_REPORTS} coverage reports`);
@@ -68,22 +71,48 @@ export async function readCoverageFiles(
   let bytes = 0;
   for (const file of files) {
     bytes += (await stat(file.path)).size;
-    if (bytes > MAX_BODY_BYTES)
-      throw new TypeError("coverage reports exceed the 30 MiB upload limit");
+    if (bytes > MAX_BODY_BYTES) tooLarge();
   }
+  // Include names, separators and the envelope before reading content. JSON
+  // escaping can expand a report well beyond its size on disk.
+  const body = {
+    tested_sha: testedSha,
+    reports: files.map(({ name }) => ({ name, content: "" })),
+  };
+  let bodyBytes = Buffer.byteLength(JSON.stringify(body));
+  if (bodyBytes > MAX_BODY_BYTES) tooLarge();
   const reports = [];
   for (const file of files) {
-    let content: string;
+    // Each report needs its own streaming decoder: a BOM belongs to the report
+    // text, and a multibyte character may straddle two reads.
+    const utf8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+    const chunks: string[] = [];
+    const append = (buffer?: Uint8Array) => {
+      let text: string;
+      try {
+        text = utf8.decode(buffer, { stream: buffer !== undefined });
+      } catch (error) {
+        if (!(error instanceof TypeError)) throw error;
+        throw new TypeError(`coverage report ${file.name} is not UTF-8 text`);
+      }
+      // The empty content string's quotes are already counted in the envelope.
+      bodyBytes += Buffer.byteLength(JSON.stringify(text)) - 2;
+      if (bodyBytes > MAX_BODY_BYTES) tooLarge();
+      chunks.push(text);
+    };
+    const handle = await open(file.path, "r");
     try {
-      content = utf8.decode(await readFile(file.path));
-    } catch (error) {
-      if (!(error instanceof TypeError)) throw error;
-      throw new TypeError(`coverage report ${file.name} is not UTF-8 text`);
+      const buffer = new Uint8Array(READ_BYTES);
+      for (;;) {
+        const { bytesRead } = await handle.read(buffer);
+        if (bytesRead === 0) break;
+        append(buffer.subarray(0, bytesRead));
+      }
+      append();
+    } finally {
+      await handle.close();
     }
-    reports.push({ name: file.name, content });
+    reports.push({ name: file.name, content: chunks.join("") });
   }
-  const body = { tested_sha: upload.tested_sha, reports };
-  if (Buffer.byteLength(JSON.stringify(body)) > MAX_BODY_BYTES)
-    throw new TypeError("coverage reports exceed the 30 MiB upload limit");
-  return body;
+  return { tested_sha: body.tested_sha, reports };
 }
