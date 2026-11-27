@@ -77,6 +77,10 @@ export interface WaitOptions {
   timeoutMs?: number;
 }
 
+// Pauses before waitForReview repeats a read that failed for a passing reason.
+// The list length is also the number of retries allowed in a row.
+const WAIT_RETRY_DELAYS_MS = [1_000, 2_000, 4_000];
+
 export class ProoflineClient extends Operations {
   readonly #transport: Transport;
   readonly mcp: McpClient;
@@ -211,6 +215,12 @@ export class ProoflineClient extends Operations {
     throw paginationLimit("the review collection exceeds maxPages");
   }
 
+  /**
+   * Polls a review until it finishes or `timeoutMs` passes. A read that fails
+   * with a transport error, 502 or 504 is repeated after 1, 2 and 4 seconds.
+   * The error is thrown once those retries are used up, or when the next pause
+   * would reach the deadline. A successful read restores all three retries.
+   */
   async waitForReview(
     orgId: string,
     reviewId: string,
@@ -223,6 +233,7 @@ export class ProoflineClient extends Operations {
     const url = this.#transport.reviewUrl(orgId, reviewId);
     let review: Review | null = null;
     let interval = 5_000;
+    let failures = 0;
     for (;;) {
       if (performance.now() >= deadline)
         return outcome(
@@ -260,8 +271,18 @@ export class ProoflineClient extends Operations {
             review,
             "the review did not finish before timeoutMs",
           );
-        throw error;
+        const delay = WAIT_RETRY_DELAYS_MS[failures];
+        if (
+          delay === undefined ||
+          !transientReadFailure(error) ||
+          performance.now() + delay >= deadline
+        )
+          throw error;
+        failures += 1;
+        await sleep(delay);
+        continue;
       }
+      failures = 0;
       validateReview(review, reviewId);
       const status = terminal(review);
       if (status !== null)
@@ -289,6 +310,14 @@ import { ProoflineError } from "./transport.js";
 
 function protocol(detail: string): ProoflineError {
   return new ProoflineError(0, "urn:proofline:sdk:invalid-response", detail);
+}
+
+// Failures that a later identical read can outlive. 429 and 503 are not listed
+// because the transport already retries them as the server directs.
+function transientReadFailure(error: unknown): boolean {
+  if (!(error instanceof ProoflineError)) return false;
+  if (error.status === 0) return error.type === "urn:proofline:sdk:transport";
+  return error.status === 502 || error.status === 504;
 }
 
 // A caller's bound, not a server fault: the collection continues past it.

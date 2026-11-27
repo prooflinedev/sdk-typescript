@@ -38,6 +38,17 @@ try {
 }
 ```
 
+## Waiting for a review
+
+`waitForReview` polls until the review finishes or `timeoutMs` passes. One failed read does not end the wait: after a transport error, 502 or 504 it repeats the read after 1, 2 and 4 seconds. It throws the last error when all three retries fail in a row, or when the next pause would reach the deadline. A successful read restores the three retries. Other errors, such as 401, 403, 404 and 500, are thrown at once.
+
+```typescript
+const outcome = await client.waitForReview(organizationId, reviewId, {
+  timeoutMs: 10 * 60_000,
+});
+console.log(outcome.status, outcome.reviewUrl);
+```
+
 ## Coverage uploads
 
 Upload CI coverage reports with a repository-restricted token that holds `coverage:write`. The token holder must have current GitHub write access to that repository. Set `PROOFLINE_TOKEN` to that token and pass the full commit SHA that the tests ran on. The server refuses branch names and abbreviated SHAs.
