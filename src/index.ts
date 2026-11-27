@@ -263,6 +263,15 @@ export class ProoflineClient extends Operations {
         throw error;
       }
       validateReview(review, reviewId);
+      // A body can finish past the deadline before the abort timer fires;
+      // the wait must not report that late read as a settled result.
+      if (performance.now() >= deadline)
+        return outcome(
+          "TIMED_OUT",
+          url,
+          review,
+          "the review did not finish before timeoutMs",
+        );
       const status = terminal(review);
       if (status !== null)
         return outcome(
