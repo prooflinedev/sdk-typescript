@@ -38,6 +38,22 @@ try {
 }
 ```
 
+## Waiting for a review
+
+`waitForReview(orgId, reviewId)` polls a requested review until it settles and returns an `{ status, reviewUrl, review, gaps, reason }` outcome. `requestReview` names a pull request, and its response names no commit: the review belongs to the head the pull request has when the request arrives. To accept a result only for the commit you hold, pass that commit to `waitForReview`.
+
+```typescript
+const requested = await client.requestReview({
+  path: { org_id: organizationId, repo_id: repositoryId, number: 12 },
+});
+const outcome = await client.waitForReview(organizationId, requested.review_id, {
+  headCommitSha: headCommitSha,
+});
+if (outcome.status !== "COMPLETED") console.error(outcome.status, outcome.reason);
+```
+
+`headCommitSha` is a full SHA of 40 or 64 hexadecimal characters; any other value throws `TypeError` before a request. A review pinned to another head ends the wait on the read that names it. Its outcome is `INCOMPLETE` whatever the review's own status, its last gap has the reason code `HEAD_COMMIT_MISMATCH`, and `reason` says that the review is pinned to another head commit. A settled review that names no head has `HEAD_COMMIT_UNAVAILABLE` instead and is not `COMPLETED` either. `outcome.review.head_commit_sha` is the commit the review is pinned to. A patch review's head is a derived revision ID, so no commit matches it. In a GitHub Actions `pull_request` job, `GITHUB_SHA` is the merge commit; pass the pull request's head.
+
 ## Coverage uploads
 
 Upload CI coverage reports with a repository-restricted token that holds `coverage:write`. The token holder must have current GitHub write access to that repository. Set `PROOFLINE_TOKEN` to that token and pass the full lowercase 40-character SHA of the commit the tests ran on.
