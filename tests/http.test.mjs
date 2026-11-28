@@ -382,7 +382,7 @@ test("coverage file uploads send report text as written under relative names", a
     root,
     files: [
       "lcov.info",
-      { path: join(root, "go.out"), name: "go/coverage.out" },
+      { path: join(root, "go.out"), name: "go/coverage:nightly.out" },
     ],
   });
   assert.equal(result.created, true);
@@ -395,7 +395,7 @@ test("coverage file uploads send report text as written under relative names", a
     tested_sha: "c".repeat(40),
     reports: [
       { name: "lcov.info", content: lcov },
-      { name: "go/coverage.out", content: go },
+      { name: "go/coverage:nightly.out", content: go },
     ],
   });
 });
@@ -416,6 +416,10 @@ test("coverage file uploads refuse locally what the server would refuse", async 
   const refusals = [
     [{ tested_sha: "main", files: ["lcov.info"] }, /full 40-character/],
     [{ tested_sha: "c".repeat(12), files: ["lcov.info"] }, /full 40-character/],
+    [
+      { tested_sha: sha.toUpperCase(), files: ["lcov.info"] },
+      /full 40-character/,
+    ],
     [{ tested_sha: sha, files: [] }, /1 to 50/],
     [{ tested_sha: sha, files: Array(51).fill("lcov.info") }, /1 to 50/],
     [
@@ -431,17 +435,33 @@ test("coverage file uploads refuse locally what the server would refuse", async 
       /inside root/,
     ],
     [
+      {
+        tested_sha: sha,
+        files: [{ path: "lcov.info", name: "C:/coverage/lcov.info" }],
+      },
+      /inside root/,
+    ],
+    [
+      {
+        tested_sha: sha,
+        files: [{ path: "lcov.info", name: "report\0.info" }],
+      },
+      /inside root/,
+    ],
+    [
       { tested_sha: sha, files: [{ path: "lcov.info", name: "a/../b.info" }] },
       /inside root/,
     ],
     [{ tested_sha: sha, files: ["report.gz"] }, /report\.gz is not UTF-8/],
     [{ tested_sha: sha, files: ["huge.info"] }, /30 MiB/],
   ];
-  for (const [upload, message] of refusals)
+  for (const [upload, message] of refusals) {
     await assert.rejects(
       client.uploadCoverageFiles(parameters, { root, ...upload }),
       (error) => error instanceof TypeError && message.test(error.message),
     );
+    assert.equal(fixture.calls.length, 0);
+  }
   await assert.rejects(
     client.uploadCoverageFiles(parameters, {
       tested_sha: sha,

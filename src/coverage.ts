@@ -1,5 +1,5 @@
 import { readFile, stat } from "node:fs/promises";
-import { isAbsolute, relative, resolve, sep } from "node:path";
+import { relative, resolve, sep } from "node:path";
 import type { UploadCoverageReportsBody } from "./operations.js";
 
 export interface CoverageFile {
@@ -10,7 +10,7 @@ export interface CoverageFile {
 }
 
 export interface CoverageFilesUpload {
-  /** The full 40-character commit the tests ran on. */
+  /** The full lowercase 40-character commit the tests ran on. */
   tested_sha: string;
   /** One to 50 report paths, or `{ path, name }` to choose the sent name. */
   files: (string | CoverageFile)[];
@@ -27,9 +27,9 @@ const utf8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 function reportName(name: string): string {
   const segments = name.split("/");
   if (
-    name === "" ||
     name.includes("\\") ||
-    isAbsolute(name) ||
+    name.includes("\0") ||
+    segments[0]?.includes(":") ||
     segments.some(
       (segment) => segment === "" || segment === "." || segment === "..",
     )
@@ -42,14 +42,16 @@ function reportName(name: string): string {
 
 /**
  * Reads coverage reports from disk into an upload body, refusing locally what
- * the server would refuse: an abbreviated SHA, a report count outside 1 to 50,
- * duplicate or escaping names, non-UTF-8 content, or a body over 30 MiB.
+ * the server would refuse: a malformed commit SHA, a report count outside
+ * 1 to 50, invalid or duplicate names, non-UTF-8 content, or a body over 30 MiB.
  */
 export async function readCoverageFiles(
   upload: CoverageFilesUpload,
 ): Promise<UploadCoverageReportsBody> {
-  if (!/^[0-9a-f]{40}$/i.test(upload.tested_sha))
-    throw new TypeError("tested_sha must be a full 40-character commit SHA");
+  if (!/^[0-9a-f]{40}$/.test(upload.tested_sha))
+    throw new TypeError(
+      "tested_sha must be a full 40-character lowercase commit SHA",
+    );
   if (upload.files.length < 1 || upload.files.length > MAX_REPORTS)
     throw new TypeError(`upload 1 to ${MAX_REPORTS} coverage reports`);
   const root = resolve(upload.root ?? ".");

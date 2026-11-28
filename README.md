@@ -40,7 +40,7 @@ try {
 
 ## Coverage uploads
 
-Upload CI coverage reports with a repository-restricted token that holds `coverage:write`. The token holder must have current GitHub write access to that repository. Set `PROOFLINE_TOKEN` to that token and pass the full commit SHA that the tests ran on. The server refuses branch names and abbreviated SHAs.
+Upload CI coverage reports with a repository-restricted token that holds `coverage:write`. The token holder must have current GitHub write access to that repository. Set `PROOFLINE_TOKEN` to that token and pass the full lowercase 40-character SHA of the commit the tests ran on.
 
 ```typescript
 import { readFile } from "node:fs/promises";
@@ -69,7 +69,7 @@ const report = await client.uploadCoverageFiles(
 );
 ```
 
-It throws a `TypeError` before sending anything when the SHA is abbreviated, the report count is outside 1 to 50, two reports share a name, a name escapes `root`, a file is not UTF-8 text, or the body would exceed 30 MiB. File system errors such as a missing report are thrown unchanged.
+The helper validates the commit SHA, the count of 1 to 50 reports, unique report names, UTF-8 content, and the 30 MiB body limit before sending a request. Each name must be a relative path with nonempty components. The helper refuses `.` and `..` components, backslashes, NUL characters, and a colon in the first component on every host. Invalid input raises a `TypeError`. File system errors such as a missing report retain their original error codes.
 
 Send 1 to 50 LCOV, Cobertura XML, JaCoCo XML, or Go cover reports in a JSON body of at most 30 MiB. Each report name must be a unique relative path, and content must be the original report text. Repeating an identical upload returns the existing report with `created: false`. An upload receipt records evidence; it does not indicate that a coverage check is met.
 
