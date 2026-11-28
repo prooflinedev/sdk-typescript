@@ -168,12 +168,13 @@ export class ProoflineClient extends Operations {
   ): AsyncGenerator<components["schemas"]["ReviewSummary"]> {
     const maxPages = integerLimit(options.maxPages ?? 100, "maxPages");
     const maxItems = integerLimit(options.maxItems ?? 10_000, "maxItems");
+    const initialQuery = { ...parameters.query };
     const seen = new Set<string>();
     let count = 0;
-    let cursor = parameters.query?.cursor;
+    let cursor = initialQuery.cursor;
     for (let index = 0; index < maxPages; index += 1) {
       const query = {
-        ...parameters.query,
+        ...initialQuery,
         ...(cursor === undefined ? {} : { cursor }),
       };
       const page = await this.listReviews({ ...parameters, query });

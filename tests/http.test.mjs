@@ -1531,12 +1531,12 @@ test("pagination keeps filters and refuses cycles, incomplete metadata and resou
   let mode = "normal";
   const fixture = await server(t, (request, response) => {
     if (mode === "malformed") return json(response, 200, null);
-    const cursor = new URL(request.url, "http://127.0.0.1").searchParams.get(
-      "cursor",
-    );
-    const more = mode !== "normal" || cursor === null;
+    const query = new URL(request.url, "http://127.0.0.1").searchParams;
+    const cursor = query.get("cursor");
+    const more = mode !== "normal" || cursor !== "next";
+    const id = cursor === "next" ? "second" : "first";
     return json(response, 200, {
-      items: [{ id: cursor ? "second" : "first" }],
+      items: [{ id: query.get("repository") === repoId ? id : "other-repo" }],
       truncated: more,
       next_cursor: mode === "missing" ? null : more ? "next" : null,
       filters: { repositories: [], environments: [], authors: [] },
@@ -1544,13 +1544,29 @@ test("pagination keeps filters and refuses cycles, incomplete metadata and resou
   });
   const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
   const parameters = { path: { org_id: orgId }, query: { repository: repoId } };
-  const items = await Array.fromAsync(client.iterReviews(parameters));
+  const query = { ...parameters.query, status: "COMPLETED", cursor: "resume" };
+  const reviews = client.iterReviews({ ...parameters, query });
+  assert.equal((await reviews.next()).value.id, "first");
+  query.repository = "00000000-0000-7000-8000-000000000005";
+  query.status = "FAILED";
+  const items = await Array.fromAsync(reviews);
   assert.deepEqual(
     items.map((item) => item.id),
-    ["first", "second"],
+    ["second"],
   );
-  assert(
-    fixture.calls.every(({ url }) => url.includes(`repository=${repoId}`)),
+  assert.deepEqual(
+    fixture.calls.map(({ url }) => {
+      const query = new URL(url, "http://127.0.0.1").searchParams;
+      return [
+        query.get("repository"),
+        query.get("status"),
+        query.get("cursor"),
+      ];
+    }),
+    [
+      [repoId, "COMPLETED", "resume"],
+      [repoId, "COMPLETED", "next"],
+    ],
   );
   mode = "cycle";
   await assert.rejects(
