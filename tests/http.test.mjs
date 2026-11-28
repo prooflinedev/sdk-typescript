@@ -1527,6 +1527,235 @@ test("the wait timeout includes an in-flight request and returns the retained re
   }
 });
 
+const headSha = "a".repeat(40);
+const otherHeadSha = "c".repeat(40);
+
+function headGap(code) {
+  return {
+    assessmentId: "",
+    status: "UNKNOWN",
+    incompletenessKind: null,
+    reasonCodes: [code],
+    releaseEvidenceGap: null,
+    checks: [],
+  };
+}
+
+const mismatchGap = headGap("HEAD_COMMIT_MISMATCH");
+const missingHeadGap = headGap("HEAD_COMMIT_UNAVAILABLE");
+
+function reviewOn(head, status = "COMPLETED") {
+  return { ...review(status), head_commit_sha: head };
+}
+
+// Poll sleeps are recorded and taken at once on a held clock, so a wait runs
+// its whole schedule without real time passing. No sleep in these tests is
+// shorter than the first 5,000 ms interval; shorter timers, such as the HTTP
+// client's keep-alive, run as set.
+function pollClock(t) {
+  let now = performance.now();
+  const waits = [];
+  const original = globalThis.setTimeout;
+  t.mock.method(performance, "now", () => now);
+  t.mock.method(globalThis, "setTimeout", (callback, delay, ...rest) => {
+    if (!(delay >= 5_000)) return original(callback, delay, ...rest);
+    waits.push(delay);
+    now += delay;
+    return original(callback, 0, ...rest);
+  });
+  return waits;
+}
+
+test("headCommitSha accepts only a review of that commit", async (t) => {
+  const waits = pollClock(t);
+  const fixture = await server(t, (_, response) =>
+    json(response, 200, reviewOn(headSha)),
+  );
+  const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
+  for (const held of [headSha, headSha.toUpperCase()]) {
+    const result = await client.waitForReview(orgId, reviewId, {
+      headCommitSha: held,
+    });
+    assert.deepEqual(
+      [result.status, result.gaps, result.reason],
+      ["COMPLETED", [], null],
+    );
+  }
+  const result = await client.waitForReview(orgId, reviewId, {
+    headCommitSha: otherHeadSha,
+  });
+  assert.equal(result.status, "INCOMPLETE");
+  assert.deepEqual(result.gaps, [mismatchGap]);
+  assert.equal(result.reason, "the review is pinned to another head commit");
+  assert.equal(result.review.head_commit_sha, headSha);
+  assert.equal(
+    result.reviewUrl,
+    `${fixture.baseUrl}/orgs/by-id/${orgId}/reviews/${reviewId}`,
+  );
+  // Leaving the option out, or passing undefined (Python's None), keeps the
+  // old behaviour.
+  for (const options of [undefined, { headCommitSha: undefined }]) {
+    const plain = await client.waitForReview(orgId, reviewId, options);
+    assert.deepEqual(
+      [plain.status, plain.gaps, plain.reason],
+      ["COMPLETED", [], null],
+    );
+  }
+  assert.equal(fixture.calls.length, 5);
+  assert.deepEqual(waits, []);
+});
+
+test("headCommitSha stops polling as soon as a read shows another commit", async (t) => {
+  const waits = pollClock(t);
+  const responses = [
+    review("PENDING"),
+    reviewOn(headSha, "RUNNING"),
+    reviewOn(headSha),
+  ];
+  let reads = 0;
+  const fixture = await server(t, (_, response) =>
+    json(response, 200, responses[reads++]),
+  );
+  const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
+  const held = await client.waitForReview(orgId, reviewId, {
+    timeoutMs: 100_000,
+    headCommitSha: headSha,
+  });
+  assert.deepEqual(
+    [held.status, held.gaps, held.reason],
+    ["COMPLETED", [], null],
+  );
+  assert.equal(reads, 3);
+  assert.deepEqual(waits.splice(0), [5_000, 10_000]);
+  reads = 0;
+  const other = await client.waitForReview(orgId, reviewId, {
+    timeoutMs: 100_000,
+    headCommitSha: otherHeadSha,
+  });
+  assert.equal(other.status, "INCOMPLETE");
+  assert.equal(other.review.status, "RUNNING");
+  assert.deepEqual(other.gaps, [mismatchGap]);
+  assert.equal(other.reason, "the review is pinned to another head commit");
+  // The second read already shows the other commit, so the completed third
+  // record is never fetched.
+  assert.equal(reads, 2);
+  assert.deepEqual(waits, [5_000]);
+});
+
+test("a review of another commit is INCOMPLETE even if it failed or stopped, with the head gap last", async (t) => {
+  pollClock(t);
+  let body;
+  const fixture = await server(t, (_, response) => json(response, 200, body));
+  const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
+  for (const status of ["FAILED", "STOPPED", "SUPERSEDED"]) {
+    body = reviewOn(headSha, status);
+    const other = await client.waitForReview(orgId, reviewId, {
+      headCommitSha: otherHeadSha,
+    });
+    assert.deepEqual([other.status, other.gaps], ["INCOMPLETE", [mismatchGap]]);
+    assert.equal(other.review.status, status);
+    const held = await client.waitForReview(orgId, reviewId, {
+      headCommitSha: headSha,
+    });
+    assert.equal(held.status, status === "FAILED" ? "FAILED" : "STOPPED");
+    assert.deepEqual([held.gaps, held.reason], [[], null]);
+  }
+  // The head gap comes after the review's own gaps.
+  body = { ...reviewOn(headSha), assessment_count: 2 };
+  const both = await client.waitForReview(orgId, reviewId, {
+    headCommitSha: otherHeadSha,
+  });
+  assert.deepEqual(both.gaps.at(-1), mismatchGap);
+  assert.deepEqual(
+    both.gaps.map((gap) => gap.reasonCodes),
+    [["ASSESSMENT_HISTORY_UNAVAILABLE"], ["HEAD_COMMIT_MISMATCH"]],
+  );
+  assert.equal(fixture.calls.length, 7);
+});
+
+test("a review with no head commit cannot complete while headCommitSha is set", async (t) => {
+  const waits = pollClock(t);
+  let body;
+  const fixture = await server(t, (_, response) => json(response, 200, body));
+  const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
+  const cases = [
+    [review(), "INCOMPLETE"],
+    [reviewOn(null), "INCOMPLETE"],
+    [reviewOn(""), "INCOMPLETE"],
+    [reviewOn(7), "INCOMPLETE"],
+    [reviewOn(null, "FAILED"), "FAILED"],
+    [reviewOn(null, "SUPERSEDED"), "STOPPED"],
+  ];
+  for (const [record, status] of cases) {
+    body = record;
+    const result = await client.waitForReview(orgId, reviewId, {
+      headCommitSha: headSha,
+    });
+    assert.equal(result.status, status);
+    assert.deepEqual(result.gaps, [missingHeadGap]);
+    assert.equal(result.reason, "the review names no head commit");
+  }
+  assert.equal(fixture.calls.length, cases.length);
+  assert.deepEqual(waits, []);
+  // Without the option nobody gets an error over a field they don't use.
+  body = reviewOn(7);
+  assert.equal(
+    (await client.waitForReview(orgId, reviewId)).status,
+    "COMPLETED",
+  );
+  // A pending review may record its head later, so polling continues to the deadline.
+  body = review("PENDING");
+  const pending = await client.waitForReview(orgId, reviewId, {
+    timeoutMs: 12_000,
+    headCommitSha: headSha,
+  });
+  assert.equal(pending.status, "TIMED_OUT");
+  assert.deepEqual(pending.gaps, [missingHeadGap]);
+  // The wait ran out of time, so the reason says that; the head gap stays in gaps.
+  assert.equal(pending.reason, "the review did not finish before timeoutMs");
+  assert.equal(fixture.calls.length, cases.length + 3);
+  assert.deepEqual(waits, [5_000, 7_000]);
+});
+
+test("headCommitSha refuses anything but a full SHA before sending a request", async (t) => {
+  const fixture = await server(t, (_, response) =>
+    json(response, 200, reviewOn("d".repeat(64))),
+  );
+  const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
+  for (const value of [
+    "main",
+    "a".repeat(7),
+    "a".repeat(39),
+    "a".repeat(41),
+    "g".repeat(40),
+    "١".repeat(40),
+    `${headSha}\n`,
+    ` ${headSha.slice(1)}`,
+    "",
+    7,
+    Buffer.from(headSha),
+    // The type allows no null. One comes from data with no commit in it, so the
+    // caller is not holding the commit they think they hold.
+    null,
+  ]) {
+    await assert.rejects(
+      client.waitForReview(orgId, reviewId, { headCommitSha: value }),
+      (error) =>
+        error instanceof TypeError &&
+        /full 40 or 64 character/.test(error.message),
+    );
+  }
+  assert.equal(fixture.calls.length, 0);
+  const result = await client.waitForReview(orgId, reviewId, {
+    headCommitSha: "D".repeat(64),
+  });
+  assert.deepEqual(
+    [result.status, result.gaps, result.reason],
+    ["COMPLETED", [], null],
+  );
+  assert.equal(fixture.calls.length, 1);
+});
+
 test("pagination keeps filters and refuses cycles, incomplete metadata and resource bounds", async (t) => {
   let mode = "normal";
   const fixture = await server(t, (request, response) => {
